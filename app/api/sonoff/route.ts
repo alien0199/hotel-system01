@@ -8,8 +8,9 @@ export async function POST(request: Request) {
     const { deviceId, action } = body;
 
     const connection = new ewelink({
-      email: process.env.EWELINK_EMAIL,
-      password: process.env.EWELINK_PASSWORD,
+      // เติม || '' เพื่อแก้ปัญหา Type Error ของ TypeScript
+      email: process.env.EWELINK_EMAIL || '',
+      password: process.env.EWELINK_PASSWORD || '',
       region: 'as', 
     });
 
