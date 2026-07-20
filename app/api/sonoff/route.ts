@@ -7,12 +7,12 @@ export async function POST(request: Request) {
     const body = await request.json();
     const { deviceId, action } = body;
 
+    // เติม as any ลงไปด้านหลัง เพื่อบังคับให้ TypeScript เลิกตรวจคำว่า region
     const connection = new ewelink({
-      // เติม || '' เพื่อแก้ปัญหา Type Error ของ TypeScript
       email: process.env.EWELINK_EMAIL || '',
       password: process.env.EWELINK_PASSWORD || '',
       region: 'as', 
-    });
+    } as any);
 
     const status = await connection.setDevicePowerState(deviceId, action);
     
