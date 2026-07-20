@@ -3,7 +3,6 @@ import { useState } from "react";
 
 export default function AdminDashboard() {
   const [promptPay, setPromptPay] = useState("");
-  // เพิ่มตัวแปร deviceId เข้ามาในห้อง
   const [rooms, setRooms] = useState([
     { number: "101", price: 250, isLightOn: false, timeLeft: 0, deviceId: "ใส่รหัสDeviceIDที่นี่" },
   ]);
@@ -24,17 +23,14 @@ export default function AdminDashboard() {
     setRooms(rooms.filter((_, index) => index !== indexToDelete));
   };
 
-  // 🔴 ฟังก์ชันสั่งการไฟ Sonoff ของจริงผ่าน API ที่เราสร้างไว้
   const toggleLight = async (index: number) => {
     const updatedRooms = [...rooms];
-    const newState = !updatedRooms[index].isLightOn; // สลับสถานะ ปิด-เปิด
+    const newState = !updatedRooms[index].isLightOn; 
     
-    // อัปเดตหน้าเว็บให้แสดงผลทันที
     updatedRooms[index].isLightOn = newState;
     if (!newState) updatedRooms[index].timeLeft = 0;
     setRooms(updatedRooms);
     
-    // ส่งคำสั่งไปหา API หลังบ้าน
     try {
       const response = await fetch('/api/sonoff', {
         method: 'POST',
@@ -61,11 +57,34 @@ export default function AdminDashboard() {
 
           <div className="mb-8 p-6 border-2 border-green-100 rounded-xl bg-green-50/50">
             <label className="block font-bold text-gray-700 mb-2">เพิ่มห้องพักใหม่ (เชื่อมต่อ Sonoff):</label>
-            <div className="flex gap-4">
-              <input type="text" value={newRoom} onChange={(e) => setNewRoom(e.target.value)} placeholder="เลขห้อง" className="w-24 p-3 border border-gray-300 rounded-lg" />
-              <input type="number" value={newPrice} onChange={(e) => setNewPrice(Number(e.target.value))} placeholder="ราคา" className="w-24 p-3 border border-gray-300 rounded-lg" />
-              <input type="text" value={newDeviceId} onChange={(e) => setNewDeviceId(e.target.value)} placeholder="Device ID (จากแอป eWeLink)" className="flex-1 p-3 border border-gray-300 rounded-lg" />
-              <button onClick={handleAddRoom} className="bg-green-600 text-white font-bold px-6 py-3 rounded-lg hover:bg-green-700">+ เพิ่มห้อง</button>
+            <div className="flex flex-wrap md:flex-nowrap gap-4">
+              <input 
+                type="text" 
+                value={newRoom} 
+                onChange={(e) => setNewRoom(e.target.value)} 
+                placeholder="เลขห้อง" 
+                className="w-24 p-3 border border-gray-300 rounded-lg text-gray-900 placeholder-gray-500 outline-none focus:ring-2 focus:ring-green-500" 
+              />
+              <input 
+                type="number" 
+                value={newPrice} 
+                onChange={(e) => setNewPrice(Number(e.target.value))} 
+                placeholder="ราคา" 
+                className="w-24 p-3 border border-gray-300 rounded-lg text-gray-900 placeholder-gray-500 outline-none focus:ring-2 focus:ring-green-500" 
+              />
+              <input 
+                type="text" 
+                value={newDeviceId} 
+                onChange={(e) => setNewDeviceId(e.target.value)} 
+                placeholder="Device ID (จากแอป eWeLink)" 
+                className="flex-1 p-3 border border-gray-300 rounded-lg text-gray-900 placeholder-gray-500 outline-none focus:ring-2 focus:ring-green-500" 
+              />
+              <button 
+                onClick={handleAddRoom} 
+                className="bg-green-600 text-white font-bold px-6 py-3 rounded-lg hover:bg-green-700 whitespace-nowrap"
+              >
+                + เพิ่มห้อง
+              </button>
             </div>
           </div>
 
