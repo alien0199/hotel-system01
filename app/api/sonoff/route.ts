@@ -1,15 +1,20 @@
 import { NextResponse } from 'next/server';
+// @ts-ignore
+import ewelink from 'ewelink-api';
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
     const { deviceId, action } = body;
 
-    // 🔴 เปลี่ยนมาใช้ require ไว้ด้านใน เพื่อป้องกันการสับสนของระบบบีบอัดโค้ด
-    // @ts-ignore
-    const Ewelink = require('ewelink-api');
+    // 🔴 ไม้ตาย: เช็คว่า Vercel เอา Class ไปซ่อนไว้ใน .default หรือไม่ ถ้าใช่ให้ดึงออกมา
+    const EwelinkClass = typeof ewelink === 'function' ? ewelink : ewelink.default;
 
-    const connection = new Ewelink({
+    if (!EwelinkClass) {
+      throw new Error("โหลดไลบรารี Sonoff ไม่สำเร็จ");
+    }
+
+    const connection = new EwelinkClass({
       email: process.env.EWELINK_EMAIL || '',
       password: process.env.EWELINK_PASSWORD || '',
       region: 'as', 
@@ -19,6 +24,6 @@ export async function POST(request: Request) {
     
     return NextResponse.json({ success: true, status });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return NextResponse.json({ success: false, error: error.message || String(error) }, { status: 500 });
   }
 }
