@@ -15,14 +15,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, message: 'ข้อมูลไม่ครบถ้วน' }, { status: 400 });
     }
 
-    // 1. ส่งรูปไปตรวจที่ Slip2Go ด้วยลิงก์ที่ถูกต้อง
+    // 1. ส่งไฟล์รูปภาพไปตรวจสอบกับ Slip2Go (ใช้ endpoint สำหรับอัปโหลดไฟล์สลิปโดยตรง)
     const slip2GoFormData = new FormData();
-    slip2GoFormData.append('files', slipImage);
+    slip2GoFormData.append('file', slipImage);
 
-    const slip2goResponse = await fetch('https://connect.slip2go.com/api/queue/verify-slip/qr-code', {
+    const slip2goResponse = await fetch('https://api.slip2go.com/api/v1/verify', {
       method: 'POST',
       headers: {
-        'x-authorization': process.env.SLIP2GO_SECRET!,
+        'Authorization': `Bearer ${process.env.SLIP2GO_SECRET!}`,
       },
       body: slip2GoFormData,
     });
@@ -30,7 +30,7 @@ export async function POST(request: Request) {
     const slipResult = await slip2goResponse.json();
     console.log('Slip2Go Response:', slipResult);
 
-    if (!slipResult.success) {
+    if (!slipResult.success || !slipResult.data) {
       return NextResponse.json({ success: false, message: 'สลิปไม่ถูกต้อง หรือไม่สามารถอ่านข้อมูลได้' }, { status: 400 });
     }
 
@@ -55,7 +55,7 @@ export async function POST(request: Request) {
       throw new Error('บันทึกข้อมูลสลิปลงฐานข้อมูลไม่สำเร็จ');
     }
 
-    // 3. สั่งเปิดเบรกเกอร์ผ่าน API ภายในของเราเอง (Sonoff/Tuya)
+    // 3. สั่งเปิดเบรกเกอร์ผ่าน API ของเรา (Tuya)
     const protocol = request.headers.get('x-forwarded-proto') || 'http';
     const host = request.headers.get('host') || 'localhost:3000';
     
