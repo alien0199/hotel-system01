@@ -71,3 +71,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ success: false, message: 'ระบบขัดข้อง กรุณาลองใหม่อีกครั้ง' }, { status: 500 });
   }
 }
+const slipResult = await slip2goResponse.json();
+
+    // 🌟 เพิ่มบรรทัดนี้เข้าไป เพื่อให้ระบบโชว์เหตุผลที่ Slip2Go ปฏิเสธ
+    console.log('Slip2Go Response:', slipResult);
+
+    // หากระบบ Slip2Go บอกว่าสลิปปลอม, ยอดเงินไม่ตรง หรือสแกนไม่ได้
+    if (!slipResult.success) {
