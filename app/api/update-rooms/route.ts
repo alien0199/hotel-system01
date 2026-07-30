@@ -12,54 +12,56 @@ export async function POST(req: Request) {
   try {
     const { rooms, promptpay } = await req.json();
 
-    // 1. บันทึกข้อมูลห้อง (Device ID และ Price) ลงตาราง rooms
+    // 1. บันทึกเบอร์พร้อมเพย์ (แยกทำก่อนเลย จะได้ชัวร์ว่าเซฟติดแน่นอน)
+    if (promptpay !== undefined) {
+      const { error: ppError } = await supabaseAdmin
+        .from('settings')
+        .upsert({ key: 'promptpay', value: String(promptpay).trim() }, { onConflict: 'key' });
+      
+      if (ppError) console.error('PromptPay Save Error:', ppError);
+    }
+
+    // 2. บันทึกข้อมูลห้อง (ราคา และ Device ID)
     if (rooms && Array.isArray(rooms)) {
       for (const room of rooms) {
         const roomNum = String(room.name || '').trim();
         if (!roomNum) continue;
 
-        // ค้นหาว่ามีห้องนี้อยู่แล้วหรือยัง (เช็คทั้ง room_number และ room_num)
+        // 🛠️ แก้ไข: ใช้ชื่อคอลัมน์ room_num ให้ตรงกับใน Supabase ของคุณเป๊ะๆ
         const { data: existingRoom } = await supabaseAdmin
           .from('rooms')
           .select('id')
-          .or(`room_number.eq.${roomNum},room_num.eq.${roomNum}`)
+          .eq('room_num', roomNum)
           .maybeSingle();
 
-        const updateData = {
-          tuya_device_id: room.deviceId || '',
-          price: Number(room.price) || 350,
-        };
-
         if (existingRoom) {
-          await supabaseAdmin
+          const { error: updateErr } = await supabaseAdmin
             .from('rooms')
-            .update(updateData)
+            .update({
+              tuya_device_id: room.deviceId || '',
+              price: Number(room.price) || 350
+            })
             .eq('id', existingRoom.id);
+            
+          if (updateErr) console.error(`Update Room ${roomNum} Error:`, updateErr);
         } else {
-          // ถ้ายังไม่มี ให้สร้างแถวใหม่ในฐานข้อมูล
-          await supabaseAdmin
+          const { error: insertErr } = await supabaseAdmin
             .from('rooms')
             .insert({
-              room_number: roomNum,
               room_num: roomNum,
               tuya_device_id: room.deviceId || '',
               price: Number(room.price) || 350,
               status: 'available'
             });
+            
+          if (insertErr) console.error(`Insert Room ${roomNum} Error:`, insertErr);
         }
       }
     }
 
-    // 2. บันทึกเบอร์พร้อมเพย์ลงตาราง settings กลาง
-    if (promptpay !== undefined) {
-      await supabaseAdmin
-        .from('settings')
-        .upsert({ key: 'promptpay', value: String(promptpay).trim() }, { onConflict: 'key' });
-    }
-
-    return NextResponse.json({ success: true, message: 'บันทึกข้อมูลทั้งหมดสำเร็จ' });
+    return NextResponse.json({ success: true, message: 'บันทึกสำเร็จ' });
   } catch (error: any) {
-    console.error('Update Rooms Error:', error);
+    console.error('API Error:', error);
     return NextResponse.json({ success: false, message: error.message }, { status: 500 });
   }
 }
