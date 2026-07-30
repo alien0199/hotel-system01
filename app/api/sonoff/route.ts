@@ -2,10 +2,12 @@ import { NextResponse } from 'next/server';
 import { createHash, createHmac } from 'node:crypto';
 
 export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
-const TUYA_BASE_URL =
+const TUYA_BASE_URL = (
   process.env.TUYA_BASE_URL?.trim() ||
-  'https://openapi-sg.iotbing.com';
+  'https://openapi-sg.iotbing.com'
+).replace(/\/+$/, '');
 
 type TuyaResponse<T> = {
   success: boolean;
@@ -27,6 +29,8 @@ type DeviceFunctionsResult = {
   category?: string;
   functions?: DeviceFunction[];
 };
+
+type ControlAction = 'on' | 'off';
 
 function sha256(value: string): string {
   return createHash('sha256')
@@ -203,16 +207,140 @@ async function getDeviceFunctions(
   return data.result || {};
 }
 
+function normalizeRoomKey(value: string): string {
+  return value
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function readRoomDeviceMap(): Record<string, string> {
+  const raw = process.env.TUYA_ROOM_DEVICES?.trim();
+
+  if (!raw) return {};
+
+  try {
+    const parsed = JSON.parse(raw);
+
+    if (
+      !parsed ||
+      typeof parsed !== 'object' ||
+      Array.isArray(parsed)
+    ) {
+      throw new Error('ต้องเป็น JSON object');
+    }
+
+    return Object.fromEntries(
+      Object.entries(parsed)
+        .filter(
+          ([, value]) =>
+            typeof value === 'string' &&
+            value.trim().length > 0
+        )
+        .map(([key, value]) => [
+          normalizeRoomKey(key),
+          String(value).trim(),
+        ])
+    );
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : 'JSON ไม่ถูกต้อง';
+
+    throw new Error(
+      `ค่า TUYA_ROOM_DEVICES ไม่ถูกต้อง: ${message}`
+    );
+  }
+}
+
+function resolveDeviceId(
+  deviceIdInput: unknown,
+  roomNumberInput: unknown
+): {
+  deviceId: string;
+  roomNumber: string;
+} {
+  const directDeviceId = String(
+    deviceIdInput || ''
+  ).trim();
+
+  const roomNumber = String(
+    roomNumberInput || ''
+  ).trim();
+
+  if (directDeviceId) {
+    return {
+      deviceId: directDeviceId,
+      roomNumber,
+    };
+  }
+
+  if (!roomNumber) {
+    throw new Error(
+      'ต้องส่ง deviceId หรือ roomNumber อย่างน้อยหนึ่งค่า'
+    );
+  }
+
+  const roomKey = normalizeRoomKey(roomNumber);
+  const roomMap = readRoomDeviceMap();
+  const mappedDeviceId = roomMap[roomKey];
+
+  if (mappedDeviceId) {
+    return {
+      deviceId: mappedDeviceId,
+      roomNumber,
+    };
+  }
+
+  const perRoomEnv =
+    process.env[`TUYA_DEVICE_ID_ROOM_${roomKey}`]?.trim();
+
+  if (perRoomEnv) {
+    return {
+      deviceId: perRoomEnv,
+      roomNumber,
+    };
+  }
+
+  const singleDeviceId =
+    process.env.TUYA_DEVICE_ID?.trim();
+
+  if (singleDeviceId) {
+    return {
+      deviceId: singleDeviceId,
+      roomNumber,
+    };
+  }
+
+  throw new Error(
+    `ไม่พบ Device ID ของห้อง ${roomNumber}. ` +
+      `ให้ตั้ง TUYA_ROOM_DEVICES หรือ ` +
+      `TUYA_DEVICE_ID_ROOM_${roomKey} ใน Vercel`
+  );
+}
+
+function getConfiguredSwitchCode(
+  roomNumber: string
+): string {
+  const roomKey = normalizeRoomKey(roomNumber);
+
+  if (roomKey) {
+    const perRoomCode =
+      process.env[
+        `TUYA_SWITCH_CODE_ROOM_${roomKey}`
+      ]?.trim();
+
+    if (perRoomCode) return perRoomCode;
+  }
+
+  return process.env.TUYA_SWITCH_CODE?.trim() || '';
+}
+
 function selectSwitchCode(
   functions: DeviceFunction[]
 ): string {
-  const configuredCode =
-    process.env.TUYA_SWITCH_CODE?.trim();
-
-  if (configuredCode) {
-    return configuredCode;
-  }
-
   const booleanFunctions = functions.filter(
     (item) =>
       item.type?.toLowerCase() === 'boolean'
@@ -221,6 +349,8 @@ function selectSwitchCode(
   const preferredCodes = [
     'switch_1',
     'switch',
+    'switch_2',
+    'switch_3',
     'switch_led',
     'switch_usb1',
     'switch_usb2',
@@ -261,7 +391,7 @@ async function sendDeviceCommand(
   accessToken: string,
   deviceId: string,
   commandCode: string,
-  action: 'on' | 'off'
+  action: ControlAction
 ) {
   const path =
     `/v1.0/iot-03/devices/${encodeURIComponent(deviceId)}/commands`;
@@ -275,7 +405,7 @@ async function sendDeviceCommand(
     ],
   });
 
-  const data = await tuyaRequest<boolean>({
+  return tuyaRequest<boolean>({
     method: 'POST',
     path,
     clientId,
@@ -283,43 +413,39 @@ async function sendDeviceCommand(
     accessToken,
     body,
   });
-
-  return data;
 }
 
-// ใช้ตรวจสอบคำสั่งที่อุปกรณ์รองรับ:
-// GET /api/.../route?deviceId=YOUR_DEVICE_ID
+// ใช้ดูคำสั่งที่อุปกรณ์รองรับ:
+// GET /api/sonoff?roomNumber=101
+// หรือ GET /api/sonoff?deviceId=YOUR_DEVICE_ID
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
-    const deviceId =
-      url.searchParams.get('deviceId')?.trim() || '';
 
-    if (!deviceId) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: 'ไม่พบ deviceId ใน query string',
-        },
-        { status: 400 }
-      );
-    }
+    const resolved = resolveDeviceId(
+      url.searchParams.get('deviceId'),
+      url.searchParams.get('roomNumber')
+    );
 
     const { clientId, clientSecret } =
       getTuyaCredentials();
+
     const accessToken = await getAccessToken(
       clientId,
       clientSecret
     );
+
     const specification = await getDeviceFunctions(
       clientId,
       clientSecret,
       accessToken,
-      deviceId
+      resolved.deviceId
     );
 
     return NextResponse.json({
       success: true,
+      roomNumber: resolved.roomNumber || undefined,
+      deviceId: resolved.deviceId,
       category: specification.category,
       functions: specification.functions || [],
     });
@@ -342,24 +468,18 @@ export async function POST(request: Request) {
   try {
     const requestBody = await request.json();
 
-    const deviceId = String(
-      requestBody?.deviceId || ''
-    ).trim();
+    const resolved = resolveDeviceId(
+      requestBody?.deviceId,
+      requestBody?.roomNumber
+    );
 
-    const action = String(
-      requestBody?.action || ''
+    const rawAction = String(
+      requestBody?.action || 'on'
     )
       .trim()
       .toLowerCase();
 
-    if (!deviceId) {
-      return NextResponse.json(
-        { success: false, error: 'ไม่พบ Device ID' },
-        { status: 400 }
-      );
-    }
-
-    if (action !== 'on' && action !== 'off') {
+    if (rawAction !== 'on' && rawAction !== 'off') {
       return NextResponse.json(
         {
           success: false,
@@ -369,35 +489,47 @@ export async function POST(request: Request) {
       );
     }
 
+    const action = rawAction as ControlAction;
+
     const { clientId, clientSecret } =
       getTuyaCredentials();
+
     const accessToken = await getAccessToken(
       clientId,
       clientSecret
     );
 
-    const specification = await getDeviceFunctions(
-      clientId,
-      clientSecret,
-      accessToken,
-      deviceId
+    let commandCode = getConfiguredSwitchCode(
+      resolved.roomNumber
     );
 
-    const commandCode = selectSwitchCode(
-      specification.functions || []
-    );
+    if (!commandCode) {
+      const specification = await getDeviceFunctions(
+        clientId,
+        clientSecret,
+        accessToken,
+        resolved.deviceId
+      );
+
+      commandCode = selectSwitchCode(
+        specification.functions || []
+      );
+    }
 
     const result = await sendDeviceCommand(
       clientId,
       clientSecret,
       accessToken,
-      deviceId,
+      resolved.deviceId,
       commandCode,
       action
     );
 
     return NextResponse.json({
       success: true,
+      roomNumber: resolved.roomNumber || undefined,
+      deviceId: resolved.deviceId,
+      action,
       commandCode,
       result: result.result,
     });
