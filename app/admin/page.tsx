@@ -25,12 +25,34 @@ const defaultRooms: RoomData[] = Array.from({ length: 8 }, (_, i) => ({
 }));
 
 export default function AdminPage() {
-  const [rooms, setRooms] = useState<RoomData[]>([]);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [passwordInput, setPasswordInput] = useState('');
+  
+  const [rooms, setRooms] = useState<RoomData[]>(defaultRooms);
   const [promptpay, setPromptpay] = useState('');
   const [statusMsg, setStatusMsg] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
-  // 🔄 ระบบดึงข้อมูลและอัปเดตสถานะอัตโนมัติจาก Supabase
+  // เช็ครหัสผ่านที่เคยกรอกไว้ในเครื่องนี้
+  useEffect(() => {
+    const auth = sessionStorage.getItem('admin_authenticated');
+    if (auth === 'true') {
+      setIsAuthenticated(true);
+    }
+  }, []);
+
+  const handleLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (passwordInput === 'SG1234') {
+      setIsAuthenticated(true);
+      sessionStorage.setItem('admin_authenticated', 'true');
+    } else {
+      alert('❌ รหัสผ่านไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง');
+      setPasswordInput('');
+    }
+  };
+
+  // ดึงข้อมูลห้องและการตั้งค่าจาก Supabase
   const fetchRoomStatus = async () => {
     try {
       const res = await fetch('/api/get-rooms');
@@ -38,37 +60,30 @@ export default function AdminPage() {
         const data = await res.json();
         if (data.success && data.rooms) {
           setRooms(prevRooms => {
-            let hasChanges = false;
-            const updatedRooms = prevRooms.map(room => {
-              // 🛠️ เช็คทั้ง room_number และ room_num ป้องกันระบบหาไม่เจอ
+            return prevRooms.map(room => {
               const dbRoom = data.rooms.find((r: any) => String(r.room_number || r.room_num) === String(room.name));
               
               if (dbRoom) {
                 const newStatus = dbRoom.status === 'occupied' ? 'ใช้งานอยู่' : 'ว่าง';
-                
-                // ถ้าสถานะในฐานข้อมูลไม่ตรงกับหน้าจอ (แปลว่ามีลูกค้าเข้า/ออก) ให้เปลี่ยนสถานะ
-                if (room.status !== newStatus) {
-                  hasChanges = true;
-                  const now = new Date().toLocaleString('th-TH');
-                  
-                  return {
-                    ...room,
-                    status: newStatus as 'ว่าง' | 'ใช้งานอยู่', 
-                    deviceId: dbRoom.tuya_device_id || room.deviceId,
-                    lastCheckIn: newStatus === 'ใช้งานอยู่' ? now : room.lastCheckIn,
-                    lastCheckOut: newStatus === 'ว่าง' ? now : room.lastCheckOut,
-                    usageCount: newStatus === 'ใช้งานอยู่' ? room.usageCount + 1 : room.usageCount
-                  };
-                }
+                return {
+                  ...room,
+                  status: newStatus as 'ว่าง' | 'ใช้งานอยู่',
+                  deviceId: dbRoom.tuya_device_id || room.deviceId,
+                  price: dbRoom.price !== undefined && dbRoom.price !== null ? dbRoom.price : room.price,
+                };
               }
               return room;
             });
-
-            if (hasChanges) {
-              localStorage.setItem('singburi_grand_rooms_v2', JSON.stringify(updatedRooms));
-            }
-            return updatedRooms;
           });
+        }
+      }
+
+      // ดึงเบอร์พร้อมเพย์จาก Supabase
+      const ppRes = await fetch('/api/get-promptpay');
+      if (ppRes.ok) {
+        const ppData = await ppRes.json();
+        if (ppData.promptpay) {
+          setPromptpay(ppData.promptpay);
         }
       }
     } catch (err) {
@@ -77,36 +92,24 @@ export default function AdminPage() {
   };
 
   useEffect(() => {
-    const savedRooms = localStorage.getItem('singburi_grand_rooms_v2');
-    const savedPP = localStorage.getItem('singburi_promptpay');
-    
-    if (savedRooms) setRooms(JSON.parse(savedRooms));
-    else setRooms(defaultRooms);
-    
-    if (savedPP) setPromptpay(savedPP);
+    if (!isAuthenticated) return;
 
-    // 1. ดึงข้อมูลครั้งแรกตอนโหลดหน้าเว็บ
     fetchRoomStatus();
-    
-    // 2. ตั้งเวลาให้รีเฟรชเช็คสถานะห้องทุกๆ 5 วินาที
     const interval = setInterval(fetchRoomStatus, 5000);
     return () => clearInterval(interval);
-  }, []);
+  }, [isAuthenticated]);
 
   const handleSaveData = async () => {
     setStatusMsg('⏳ กำลังบันทึกข้อมูล...');
     try {
-      localStorage.setItem('singburi_grand_rooms_v2', JSON.stringify(rooms));
-      localStorage.setItem('singburi_promptpay', promptpay);
-
       const res = await fetch('/api/update-rooms', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rooms }),
+        body: JSON.stringify({ rooms, promptpay }),
       });
 
       if (res.ok) {
-        setStatusMsg('💾 บันทึกข้อมูล Device ID ลงฐานข้อมูลเรียบร้อยแล้ว!');
+        setStatusMsg('💾 บันทึกข้อมูลลงฐานข้อมูลกลางเรียบร้อยแล้ว ทุกเครื่องจะอัปเดตทันที!');
       } else {
         setStatusMsg('❌ บันทึกลงฐานข้อมูลไม่สำเร็จ');
       }
@@ -121,12 +124,10 @@ export default function AdminPage() {
   };
 
   const handleResetDaily = () => {
-    if(confirm('⚠️ ต้องการเคลียร์ยอดสรุปรายวันและประวัติการเข้าพักทั้งหมดหรือไม่? (ชื่อห้องและราคายังอยู่เหมือนเดิม)')) {
+    if(confirm('⚠️ ต้องการเคลียร์ยอดสรุปรายวันและสถานะห้องทั้งหมดหรือไม่?')) {
       const resetRooms = rooms.map(r => ({ ...r, usageCount: 0, status: 'ว่าง' as 'ว่าง' | 'ใช้งานอยู่', lastCheckIn: null, lastCheckOut: null }));
       setRooms(resetRooms);
-      localStorage.setItem('singburi_grand_rooms_v2', JSON.stringify(resetRooms));
       
-      // อัปเดตฐานข้อมูลให้เป็นว่างทั้งหมดด้วย
       resetRooms.forEach(room => {
         fetch('/api/get-rooms', {
           method: 'POST',
@@ -161,23 +162,19 @@ export default function AdminPage() {
         const newStatus = action === 'turn-on' ? 'ใช้งานอยู่' : 'ว่าง';
         const dbStatus = action === 'turn-on' ? 'occupied' : 'available';
 
-        // 🛠️ ส่งข้อมูลอัปเดตสถานะไปที่ฐานข้อมูลด้วย (Admin กดเอง)
         fetch('/api/get-rooms', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ roomNumber: room.name, status: dbStatus }),
         });
         
-        const updated = rooms.map(r => {
+        setRooms(rooms.map(r => {
           if (r.id === room.id) {
-            // 🛠️ แก้ไข: เปลี่ยน as const เป็น as 'ว่าง' | 'ใช้งานอยู่'
             if (action === 'turn-on') return { ...r, status: newStatus as 'ว่าง' | 'ใช้งานอยู่', lastCheckIn: now, usageCount: r.usageCount + 1 };
             else return { ...r, status: newStatus as 'ว่าง' | 'ใช้งานอยู่', lastCheckOut: now };
           }
           return r;
-        });
-        setRooms(updated);
-        localStorage.setItem('singburi_grand_rooms_v2', JSON.stringify(updated));
+        }));
 
       } else {
         setStatusMsg(`❌ ไม่สำเร็จ: ${data.message}`);
@@ -190,9 +187,33 @@ export default function AdminPage() {
   };
 
   const getBaseUrl = () => typeof window !== 'undefined' ? window.location.origin : 'https://hotel-system01.vercel.app';
-
   const totalIncome = rooms.reduce((sum, r) => sum + (r.usageCount * r.price), 0);
   const totalCheckIns = rooms.reduce((sum, r) => sum + r.usageCount, 0);
+
+  // หน้าจอกรอกรหัสผ่านก่อนเข้าใช้งาน
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-blue-900 flex items-center justify-center px-4 font-sans">
+        <div className="bg-white p-8 rounded-2xl shadow-2xl max-w-md w-full border-4 border-yellow-400 text-center">
+          <h1 className="text-2xl font-black text-blue-900 mb-2">🏨 สิงห์บุรีแกรนด์บางระจัน</h1>
+          <p className="text-gray-500 mb-6 font-semibold">กรุณากรอกรหัสผ่านเพื่อเข้าสู่ระบบจัดการ</p>
+          <form onSubmit={handleLogin}>
+            <input 
+              type="password" 
+              value={passwordInput} 
+              onChange={(e) => setPasswordInput(e.target.value)} 
+              placeholder="🔑 กรอกรหัสผ่าน (SG1234)" 
+              className="w-full p-3 border-2 border-blue-400 rounded-xl mb-4 text-center font-bold text-xl text-gray-900 bg-white placeholder-gray-400 focus:outline-none focus:border-blue-600"
+              autoFocus
+            />
+            <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-xl font-bold text-lg shadow-lg transition">
+              เข้าสู่ระบบ
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
 
   if (rooms.length === 0) return null;
 
