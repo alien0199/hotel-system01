@@ -40,10 +40,28 @@ export default function AdminPage() {
     if (savedPP) setPromptpay(savedPP);
   }, []);
 
-  const handleSaveData = () => {
-    localStorage.setItem('singburi_grand_rooms_v2', JSON.stringify(rooms));
-    localStorage.setItem('singburi_promptpay', promptpay);
-    setStatusMsg('💾 บันทึกข้อมูลการตั้งค่าทั้งหมดเรียบร้อยแล้ว!');
+  // 🛠️ อัปเดตฟังก์ชันนี้: บันทึกลงเครื่อง + ส่งไป Supabase
+  const handleSaveData = async () => {
+    setStatusMsg('⏳ กำลังบันทึกข้อมูล...');
+    try {
+      localStorage.setItem('singburi_grand_rooms_v2', JSON.stringify(rooms));
+      localStorage.setItem('singburi_promptpay', promptpay);
+
+      // ส่งไปบันทึกลง Supabase
+      const res = await fetch('/api/update-rooms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rooms }),
+      });
+
+      if (res.ok) {
+        setStatusMsg('💾 บันทึกข้อมูล Device ID ลงฐานข้อมูลเรียบร้อยแล้ว!');
+      } else {
+        setStatusMsg('❌ บันทึกลงฐานข้อมูลไม่สำเร็จ');
+      }
+    } catch (error) {
+      setStatusMsg('❌ ไม่สามารถติดต่อเซิร์ฟเวอร์ได้');
+    }
     setTimeout(() => setStatusMsg(''), 3000);
   };
 
@@ -139,7 +157,6 @@ export default function AdminPage() {
             </div>
           </div>
           <div className="mt-4 md:mt-0 flex flex-col items-end">
-            {/* 🛠️ จุดที่แก้: บังคับตัวหนังสือสีดำ พื้นขาว ขอบชัด สำหรับช่องพร้อมเพย์ */}
             <input 
               type="text" 
               value={promptpay} 
@@ -157,12 +174,10 @@ export default function AdminPage() {
               <div className="bg-gray-50 px-4 py-3 border-b border-gray-200 flex justify-between items-center">
                 <div className="flex items-center space-x-2 w-1/2">
                   <span className="font-bold text-gray-500">ห้อง:</span>
-                  {/* 🛠️ จุดที่แก้: บังคับตัวหนังสือสีดำ พื้นขาว */}
                   <input type="text" value={room.name} onChange={(e) => handleUpdateRoom(room.id, 'name', e.target.value)} className="text-2xl font-black text-blue-900 bg-white border border-gray-300 rounded px-2 w-full focus:outline-none focus:border-blue-500" />
                 </div>
                 <div className="flex items-center space-x-2">
                   <span className="font-bold text-gray-500">ราคา:</span>
-                  {/* 🛠️ จุดที่แก้: บังคับตัวหนังสือสีดำ พื้นขาว */}
                   <input type="number" value={room.price} onChange={(e) => handleUpdateRoom(room.id, 'price', Number(e.target.value))} className="w-20 p-1 border border-gray-300 rounded font-bold text-blue-700 text-center bg-white" />
                   <span className="font-bold text-gray-500">฿</span>
                 </div>
@@ -179,7 +194,6 @@ export default function AdminPage() {
                 </div>
 
                 <div className="mb-4">
-                  {/* 🛠️ จุดที่แก้: บังคับตัวหนังสือสีดำ พื้นขาว ขอบชัด สำหรับช่อง Device ID */}
                   <input 
                     type="text" 
                     value={room.deviceId} 
