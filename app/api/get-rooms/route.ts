@@ -10,14 +10,12 @@ const supabaseAdmin = createClient(
 
 export async function GET() {
   try {
-    // 🛠️ แก้ไข: สั่งให้ดึง room_num และ price ออกมาด้วย ให้ตรงกับตารางเป๊ะๆ
-    const { data, error } = await supabaseAdmin
-      .from('rooms')
-      .select('room_num, status, tuya_device_id, price');
-      
+    // 🛠️ ดึงข้อมูลทั้งหมด (*) ตัดปัญหาหาชื่อคอลัมน์ไม่เจอ
+    const { data, error } = await supabaseAdmin.from('rooms').select('*');
     if (error) throw error;
     return NextResponse.json({ success: true, rooms: data });
   } catch (error: any) {
+    console.error('GET Rooms Error:', error);
     return NextResponse.json({ success: false, message: error.message }, { status: 500 });
   }
 }
@@ -25,14 +23,11 @@ export async function GET() {
 export async function POST(req: Request) {
   try {
     const { roomNumber, status } = await req.json();
-    // 🛠️ แก้ไข: เปลี่ยนจาก eq('room_number') เป็น eq('room_num') ให้ตรงกับตาราง
-    await supabaseAdmin
-      .from('rooms')
-      .update({ status })
-      .eq('room_num', roomNumber);
-      
+    // 🛠️ อัปเดตโดยอิงจาก room_num
+    await supabaseAdmin.from('rooms').update({ status }).eq('room_num', roomNumber);
     return NextResponse.json({ success: true });
   } catch (error: any) {
+    console.error('POST Status Error:', error);
     return NextResponse.json({ success: false }, { status: 500 });
   }
 }
