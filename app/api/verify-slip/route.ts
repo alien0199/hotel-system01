@@ -7,8 +7,9 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+// URL สำหรับตรวจสลิปด้วย "รูปภาพ" (REST API)
 const DEFAULT_SLIP2GO_API_URL =
-  'https://connect.slip2go.com/api/verify-slip/qr-image/info';
+  'https://api.slip2go.com/api/v1/verify'; 
 
 type Slip2GoData = {
   referenceId?: string;
@@ -204,8 +205,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const { secret, apiUrl } =
-      getSlip2GoConfig();
+    const { secret, apiUrl } = getSlip2GoConfig();
 
     const slip2GoFormData = new FormData();
     slip2GoFormData.append(
@@ -214,12 +214,12 @@ export async function POST(request: Request) {
       slipEntry.name || 'slip.jpg'
     );
 
+    // ส่งข้อมูลไปตรวจสลิปที่ Slip2Go
     const slip2GoResponse = await fetch(apiUrl, {
       method: 'POST',
       headers: {
-        // Slip2Go กำหนดให้ใส่ Secret ตรง ๆ
-        // ไม่ต้องเติมคำว่า Bearer
-        Authorization: secret,
+        // 🛠️ แก้ไข: ต้องมีคำว่า Bearer นำหน้าตามมาตรฐาน REST API
+        'Authorization': `Bearer ${secret}`,
       },
       body: slip2GoFormData,
       cache: 'no-store',
@@ -237,9 +237,10 @@ export async function POST(request: Request) {
       slipResult.code ?? ''
     );
 
+    // API Slip2Go บางตัวส่งรหัสสำเร็จเป็น 200 หรือ 200000 
     if (
       !slip2GoResponse.ok ||
-      slipCode !== '200000' ||
+      (slipCode !== '200000' && slipCode !== '200') ||
       !slipResult.data
     ) {
       return NextResponse.json(
@@ -262,7 +263,7 @@ export async function POST(request: Request) {
         {
           success: false,
           message:
-            'Slip2Go ตรวจสลิปได้ แต่ไม่ส่ง transRef กลับมา',
+            'Slip2Go ตรวจสลิปได้ แต่ไม่ส่ง transRef (เลขอ้างอิง) กลับมา',
         },
         { status: 502 }
       );
@@ -329,6 +330,7 @@ export async function POST(request: Request) {
 
     reservedTransRef = transRef;
 
+    // ยิงคำสั่งเปิดไฟไปที่ API ของเราเอง (Tuya)
     const sonoffUrl = new URL(
       '/api/sonoff',
       request.url
