@@ -53,7 +53,6 @@ export default function AdminPage() {
                   
                   return {
                     ...room,
-                    // 🛠️ แก้ไข: บังคับ Type ให้ตรงกับที่ TypeScript ต้องการเป๊ะๆ
                     status: newStatus as 'ว่าง' | 'ใช้งานอยู่', 
                     deviceId: dbRoom.tuya_device_id || room.deviceId,
                     lastCheckIn: newStatus === 'ใช้งานอยู่' ? now : room.lastCheckIn,
@@ -123,7 +122,7 @@ export default function AdminPage() {
 
   const handleResetDaily = () => {
     if(confirm('⚠️ ต้องการเคลียร์ยอดสรุปรายวันและประวัติการเข้าพักทั้งหมดหรือไม่? (ชื่อห้องและราคายังอยู่เหมือนเดิม)')) {
-      const resetRooms = rooms.map(r => ({ ...r, usageCount: 0, status: 'ว่าง' as const, lastCheckIn: null, lastCheckOut: null }));
+      const resetRooms = rooms.map(r => ({ ...r, usageCount: 0, status: 'ว่าง' as 'ว่าง' | 'ใช้งานอยู่', lastCheckIn: null, lastCheckOut: null }));
       setRooms(resetRooms);
       localStorage.setItem('singburi_grand_rooms_v2', JSON.stringify(resetRooms));
       
@@ -171,8 +170,9 @@ export default function AdminPage() {
         
         const updated = rooms.map(r => {
           if (r.id === room.id) {
-            if (action === 'turn-on') return { ...r, status: newStatus as const, lastCheckIn: now, usageCount: r.usageCount + 1 };
-            else return { ...r, status: newStatus as const, lastCheckOut: now };
+            // 🛠️ แก้ไข: เปลี่ยน as const เป็น as 'ว่าง' | 'ใช้งานอยู่'
+            if (action === 'turn-on') return { ...r, status: newStatus as 'ว่าง' | 'ใช้งานอยู่', lastCheckIn: now, usageCount: r.usageCount + 1 };
+            else return { ...r, status: newStatus as 'ว่าง' | 'ใช้งานอยู่', lastCheckOut: now };
           }
           return r;
         });
