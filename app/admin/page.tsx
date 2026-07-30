@@ -81,7 +81,6 @@ export default function AdminPage() {
         
         const updated = rooms.map(r => {
           if (r.id === room.id) {
-            // 🛠️ แก้ไขตรงนี้: เพิ่ม 'as const' เพื่อระบุชนิดข้อมูลให้ชัดเจน
             if (action === 'turn-on') return { ...r, status: 'ใช้งานอยู่' as const, lastCheckIn: now, usageCount: r.usageCount + 1 };
             else return { ...r, status: 'ว่าง' as const, lastCheckOut: now };
           }
@@ -140,7 +139,14 @@ export default function AdminPage() {
             </div>
           </div>
           <div className="mt-4 md:mt-0 flex flex-col items-end">
-            <input type="text" value={promptpay} onChange={(e) => setPromptpay(e.target.value)} placeholder="เบอร์พร้อมเพย์รับเงิน..." className="p-2 border-2 border-blue-300 rounded mb-2 text-center font-bold" />
+            {/* 🛠️ จุดที่แก้: บังคับตัวหนังสือสีดำ พื้นขาว ขอบชัด สำหรับช่องพร้อมเพย์ */}
+            <input 
+              type="text" 
+              value={promptpay} 
+              onChange={(e) => setPromptpay(e.target.value)} 
+              placeholder="เบอร์พร้อมเพย์รับเงิน..." 
+              className="p-2 border-2 border-blue-400 rounded mb-2 text-center font-bold text-gray-900 bg-white placeholder-gray-400 focus:outline-none focus:border-blue-600" 
+            />
             <button onClick={handleResetDaily} className="text-red-500 hover:text-red-700 font-bold text-sm underline">🔄 รีเซ็ตยอดรายวัน (เริ่มวันใหม่)</button>
           </div>
         </div>
@@ -151,11 +157,13 @@ export default function AdminPage() {
               <div className="bg-gray-50 px-4 py-3 border-b border-gray-200 flex justify-between items-center">
                 <div className="flex items-center space-x-2 w-1/2">
                   <span className="font-bold text-gray-500">ห้อง:</span>
+                  {/* 🛠️ จุดที่แก้: บังคับตัวหนังสือสีดำ พื้นขาว */}
                   <input type="text" value={room.name} onChange={(e) => handleUpdateRoom(room.id, 'name', e.target.value)} className="text-2xl font-black text-blue-900 bg-white border border-gray-300 rounded px-2 w-full focus:outline-none focus:border-blue-500" />
                 </div>
                 <div className="flex items-center space-x-2">
                   <span className="font-bold text-gray-500">ราคา:</span>
-                  <input type="number" value={room.price} onChange={(e) => handleUpdateRoom(room.id, 'price', Number(e.target.value))} className="w-20 p-1 border border-gray-300 rounded font-bold text-blue-700 text-center" />
+                  {/* 🛠️ จุดที่แก้: บังคับตัวหนังสือสีดำ พื้นขาว */}
+                  <input type="number" value={room.price} onChange={(e) => handleUpdateRoom(room.id, 'price', Number(e.target.value))} className="w-20 p-1 border border-gray-300 rounded font-bold text-blue-700 text-center bg-white" />
                   <span className="font-bold text-gray-500">฿</span>
                 </div>
               </div>
@@ -171,13 +179,20 @@ export default function AdminPage() {
                 </div>
 
                 <div className="mb-4">
-                  <input type="text" value={room.deviceId} onChange={(e) => handleUpdateRoom(room.id, 'deviceId', e.target.value)} className="w-full p-2 border border-gray-300 rounded text-sm bg-gray-50" placeholder="🔧 Device ID ของ Tuya" />
+                  {/* 🛠️ จุดที่แก้: บังคับตัวหนังสือสีดำ พื้นขาว ขอบชัด สำหรับช่อง Device ID */}
+                  <input 
+                    type="text" 
+                    value={room.deviceId} 
+                    onChange={(e) => handleUpdateRoom(room.id, 'deviceId', e.target.value)} 
+                    className="w-full p-2 border-2 border-gray-300 rounded text-base font-semibold text-gray-900 bg-white placeholder-gray-400 focus:outline-none focus:border-blue-500" 
+                    placeholder="🔧 ใส่ Device ID ของ Tuya ที่นี่..." 
+                  />
                 </div>
 
                 <div className="bg-blue-50 p-4 rounded-xl mb-4 flex justify-around">
                   <div className="text-center bg-white p-2 rounded shadow-sm w-[45%]">
                     <p className="font-bold text-red-600 text-xs mb-1">1. สแกนจ่ายเงิน ({room.price} ฿)</p>
-                    {promptpay ? <img src={`https://promptpay.io/${promptpay}/${room.price}.png`} alt="Pay QR" className="w-24 h-24 mx-auto" /> : <div className="w-24 h-24 mx-auto bg-gray-100 border text-xs flex items-center">ใส่พร้อมเพย์ก่อน</div>}
+                    {promptpay ? <img src={`https://promptpay.io/${promptpay}/${room.price}.png`} alt="Pay QR" className="w-24 h-24 mx-auto" /> : <div className="w-24 h-24 mx-auto bg-gray-100 border text-xs flex items-center justify-center text-gray-500">ใส่พร้อมเพย์ก่อน</div>}
                   </div>
                   <div className="text-center bg-white p-2 rounded shadow-sm w-[45%]">
                     <p className="font-bold text-green-600 text-xs mb-1">2. ส่งสลิป (ห้อง {room.name})</p>
