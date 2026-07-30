@@ -8,14 +8,14 @@ interface RoomData {
   deviceId: string;
   price: number;
   usageCount: number;
-  status: 'ว่าง' | 'ใช้งานอยู่'; // เพิ่มสถานะห้อง
+  status: 'ว่าง' | 'ใช้งานอยู่';
   lastCheckIn: string | null;
   lastCheckOut: string | null;
 }
 
 const defaultRooms: RoomData[] = Array.from({ length: 8 }, (_, i) => ({
   id: `room_${i + 1}`,
-  name: `10${i + 1}`, // ชื่อห้องที่แก้ไขได้และจะไปโผล่ใน QR
+  name: `10${i + 1}`,
   deviceId: '',
   price: 350,
   usageCount: 0,
@@ -30,7 +30,6 @@ export default function AdminPage() {
   const [statusMsg, setStatusMsg] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
-  // ดึงข้อมูลเมื่อเปิดหน้าเว็บ
   useEffect(() => {
     const savedRooms = localStorage.getItem('singburi_grand_rooms_v2');
     const savedPP = localStorage.getItem('singburi_promptpay');
@@ -41,7 +40,6 @@ export default function AdminPage() {
     if (savedPP) setPromptpay(savedPP);
   }, []);
 
-  // ฟังก์ชันสำหรับ "ปุ่มเซฟ" โดยเฉพาะ
   const handleSaveData = () => {
     localStorage.setItem('singburi_grand_rooms_v2', JSON.stringify(rooms));
     localStorage.setItem('singburi_promptpay', promptpay);
@@ -49,12 +47,10 @@ export default function AdminPage() {
     setTimeout(() => setStatusMsg(''), 3000);
   };
 
-  // อัปเดตค่าต่างๆ ในหน้าจอ (ยังไม่เซฟถาวรจนกว่าจะกดปุ่ม)
   const handleUpdateRoom = (id: string, field: keyof RoomData, value: string | number) => {
     setRooms(rooms.map(r => r.id === id ? { ...r, [field]: value } : r));
   };
 
-  // รีเซ็ตยอดรายวัน (กดตอนเที่ยงคืนหรือเช้า)
   const handleResetDaily = () => {
     if(confirm('⚠️ ต้องการเคลียร์ยอดสรุปรายวันและประวัติการเข้าพักทั้งหมดหรือไม่? (ชื่อห้องและราคายังอยู่เหมือนเดิม)')) {
       const resetRooms = rooms.map(r => ({ ...r, usageCount: 0, status: 'ว่าง' as const, lastCheckIn: null, lastCheckOut: null }));
@@ -64,7 +60,6 @@ export default function AdminPage() {
     }
   };
 
-  // สั่งเปิด-ปิดไฟ และเปลี่ยนสถานะ
   const handleControl = async (room: RoomData, action: 'turn-on' | 'turn-off') => {
     if (!room.deviceId) {
       alert(`⚠️ กรุณาใส่ "Device ID" ของห้อง ${room.name} และกดบันทึกก่อนครับ`);
@@ -84,16 +79,16 @@ export default function AdminPage() {
       if (res.ok && data.success) {
         setStatusMsg(`✅ สำเร็จ: ไฟห้อง ${room.name} ถูก ${action === 'turn-on' ? 'เปิด' : 'ปิด'} แล้ว`);
         
-        // อัปเดตสถานะและจำนวนครั้ง
         const updated = rooms.map(r => {
           if (r.id === room.id) {
-            if (action === 'turn-on') return { ...r, status: 'ใช้งานอยู่', lastCheckIn: now, usageCount: r.usageCount + 1 };
-            else return { ...r, status: 'ว่าง', lastCheckOut: now };
+            // 🛠️ แก้ไขตรงนี้: เพิ่ม 'as const' เพื่อระบุชนิดข้อมูลให้ชัดเจน
+            if (action === 'turn-on') return { ...r, status: 'ใช้งานอยู่' as const, lastCheckIn: now, usageCount: r.usageCount + 1 };
+            else return { ...r, status: 'ว่าง' as const, lastCheckOut: now };
           }
           return r;
         });
         setRooms(updated);
-        localStorage.setItem('singburi_grand_rooms_v2', JSON.stringify(updated)); // เซฟให้อัตโนมัติเมื่อมีการเปิดปิดไฟ
+        localStorage.setItem('singburi_grand_rooms_v2', JSON.stringify(updated));
 
       } else {
         setStatusMsg(`❌ ไม่สำเร็จ: ${data.message}`);
@@ -107,7 +102,6 @@ export default function AdminPage() {
 
   const getBaseUrl = () => typeof window !== 'undefined' ? window.location.origin : 'https://hotel-system01.vercel.app';
 
-  // คำนวณสรุปรายวัน
   const totalIncome = rooms.reduce((sum, r) => sum + (r.usageCount * r.price), 0);
   const totalCheckIns = rooms.reduce((sum, r) => sum + r.usageCount, 0);
 
@@ -134,7 +128,6 @@ export default function AdminPage() {
           }`}>{statusMsg}</div>
         )}
 
-        {/* แดชบอร์ดสรุปรายวัน */}
         <div className="bg-white p-6 rounded-2xl shadow-md border border-gray-200 mb-8 flex flex-col md:flex-row items-center justify-between">
           <div className="flex space-x-8">
             <div>
@@ -152,7 +145,6 @@ export default function AdminPage() {
           </div>
         </div>
 
-        {/* จัดการห้องพัก */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           {rooms.map((room) => (
             <div key={room.id} className="bg-white rounded-2xl shadow-md overflow-hidden border-2 border-gray-200">
@@ -169,7 +161,6 @@ export default function AdminPage() {
               </div>
 
               <div className="p-4">
-                {/* แสดงสถานะแบบชัดเจน */}
                 <div className={`text-center py-2 mb-4 rounded-lg font-bold text-lg ${room.status === 'ว่าง' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
                   สถานะ: {room.status === 'ว่าง' ? '🟢 ว่างพร้อมให้บริการ' : '🔴 มีลูกค้า (กำลังใช้งาน)'}
                 </div>
@@ -190,7 +181,6 @@ export default function AdminPage() {
                   </div>
                   <div className="text-center bg-white p-2 rounded shadow-sm w-[45%]">
                     <p className="font-bold text-green-600 text-xs mb-1">2. ส่งสลิป (ห้อง {room.name})</p>
-                    {/* สังเกตว่าโค้ด QR ใช้ room.name ที่ตั้งไว้เป๊ะๆ */}
                     <img src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(`${getBaseUrl()}/?room=${room.name}`)}`} alt="Upload QR" className="w-24 h-24 mx-auto" />
                   </div>
                 </div>
