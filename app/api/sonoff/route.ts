@@ -235,7 +235,7 @@ function readRoomDeviceMap(): Record<string, string> {
   }
 }
 
-// 🛠️ อัปเกรด: เปลี่ยนเป็น async เพื่อให้เช็คฐานข้อมูล Supabase ได้
+// 🛠️ อัปเกรด: ค้นหาฐานข้อมูล Supabase ด้วยคอลัมน์ room_num 
 async function resolveDeviceId(
   deviceIdInput: unknown,
   roomNumberInput: unknown
@@ -279,7 +279,7 @@ async function resolveDeviceId(
     const { data, error } = await supabaseAdmin
       .from('rooms')
       .select('tuya_device_id')
-      .eq('room_number', roomNumber)
+      .eq('room_num', roomNumber) // 🛠️ แก้ไขให้ตรงกับตารางของคุณ (room_num)
       .maybeSingle();
 
     if (data && data.tuya_device_id) {
