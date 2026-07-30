@@ -18,11 +18,11 @@ export async function POST(req: Request) {
         const roomNum = String(room.name || '').trim();
         if (!roomNum) continue;
 
-        // ค้นหาว่ามีห้องนี้อยู่แล้วหรือยัง (เช็คทั้ง room_number และ room_num)
+        // ค้นหาว่ามีห้องนี้อยู่แล้วหรือยัง
         const { data: existingRooms, error: findError } = await supabaseAdmin
           .from('rooms')
           .select('id')
-          .or(`room_number.eq.${roomNum},room_num.eq.${roomNum}`);
+          .eq('room_num', roomNum);
 
         if (findError) {
           console.error(`Find room error (room ${roomNum}):`, findError);
@@ -51,7 +51,6 @@ export async function POST(req: Request) {
           const { error: insertError } = await supabaseAdmin
             .from('rooms')
             .insert({
-              room_number: roomNum,
               room_num: roomNum,
               tuya_device_id: room.deviceId || '',
               price: Number(room.price) || 350,
