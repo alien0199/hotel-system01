@@ -34,6 +34,10 @@ export default function AdminPage() {
   const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
+    // 🧹 ทุบหม้อข้าว! ล้างความจำเก่าในเครื่องทิ้งให้หมด จะได้ไม่เอาเบอร์เก่ามาโชว์
+    localStorage.removeItem('singburi_grand_rooms_v2');
+    localStorage.removeItem('singburi_promptpay');
+
     const auth = sessionStorage.getItem('admin_authenticated');
     if (auth === 'true') {
       setIsAuthenticated(true);
@@ -54,7 +58,10 @@ export default function AdminPage() {
   // โหลดข้อมูลทั้งหมดครั้งแรกตอนเข้าหน้าเว็บ
   const fetchInitialData = async () => {
     try {
-      const res = await fetch('/api/get-rooms');
+      // 🚀 ใส่ timestamp เพื่อหลอก Vercel ไม่ให้ใช้ Cache เก่า (บังคับดึงข้อมูลใหม่เสมอ)
+      const ts = new Date().getTime();
+
+      const res = await fetch(`/api/get-rooms?t=${ts}`);
       if (res.ok) {
         const data = await res.json();
         if (data.success && data.rooms) {
@@ -76,7 +83,7 @@ export default function AdminPage() {
         }
       }
 
-      const ppRes = await fetch('/api/get-promptpay');
+      const ppRes = await fetch(`/api/get-promptpay?t=${ts}`);
       if (ppRes.ok) {
         const ppData = await ppRes.json();
         if (ppData.promptpay) {
@@ -88,10 +95,11 @@ export default function AdminPage() {
     }
   };
 
-  // ดึงเฉพาะสถานะห้องทุกๆ 5 วินาที (ไม่ไปทับราคาและ Device ID ที่กำลังพิมพ์)
+  // ดึงเฉพาะสถานะห้องทุกๆ 5 วินาที
   const fetchRoomStatusOnly = async () => {
     try {
-      const res = await fetch('/api/get-rooms');
+      const ts = new Date().getTime();
+      const res = await fetch(`/api/get-rooms?t=${ts}`);
       if (res.ok) {
         const data = await res.json();
         if (data.success && data.rooms) {
@@ -123,7 +131,6 @@ export default function AdminPage() {
 
   useEffect(() => {
     if (!isAuthenticated) return;
-
     fetchInitialData();
     const interval = setInterval(fetchRoomStatusOnly, 5000);
     return () => clearInterval(interval);
@@ -139,7 +146,7 @@ export default function AdminPage() {
       });
 
       if (res.ok) {
-        setStatusMsg('💾 บันทึกราคา เบอร์พร้อมเพย์ และ Device ID ลงฐานข้อมูลกลางเรียบร้อยแล้ว!');
+        setStatusMsg('💾 บันทึกข้อมูลลงฐานข้อมูลสำเร็จ รีเฟรชก็ไม่หายแล้ว!');
       } else {
         setStatusMsg('❌ บันทึกลงฐานข้อมูลไม่สำเร็จ');
       }
