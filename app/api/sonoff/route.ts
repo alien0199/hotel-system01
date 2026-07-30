@@ -235,7 +235,6 @@ function readRoomDeviceMap(): Record<string, string> {
   }
 }
 
-// 🛠️ อัปเกรด: ค้นหาฐานข้อมูล Supabase ด้วยคอลัมน์ room_num 
 async function resolveDeviceId(
   deviceIdInput: unknown,
   roomNumberInput: unknown
@@ -243,7 +242,6 @@ async function resolveDeviceId(
   const directDeviceId = String(deviceIdInput || '').trim();
   const roomNumber = String(roomNumberInput || '').trim();
 
-  // 1. ถ้ามี Device ID ส่งมาตรงๆ (เช่น จากหน้าเว็บ Admin) ให้ใช้เลย
   if (directDeviceId) {
     return { deviceId: directDeviceId, roomNumber };
   }
@@ -253,41 +251,44 @@ async function resolveDeviceId(
   }
 
   const roomKey = normalizeRoomKey(roomNumber);
-
-  // 2. หาจาก TUYA_ROOM_DEVICES ใน Vercel
   const roomMap = readRoomDeviceMap();
   const mappedDeviceId = roomMap[roomKey];
   if (mappedDeviceId) {
     return { deviceId: mappedDeviceId, roomNumber };
   }
 
-  // 3. หาจาก TUYA_DEVICE_ID_ROOM_XXX ใน Vercel
   const perRoomEnv = process.env[`TUYA_DEVICE_ID_ROOM_${roomKey}`]?.trim();
   if (perRoomEnv) {
     return { deviceId: perRoomEnv, roomNumber };
   }
 
-  // 4. 🛠️ ไม้ตายสุดท้าย: วิ่งไปหา Device ID จากฐานข้อมูล Supabase อัตโนมัติ!
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
   const supabaseKey = (process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY)?.trim();
 
-  if (supabaseUrl && supabaseKey) {
-    const supabaseAdmin = createClient(supabaseUrl, supabaseKey, {
-      auth: { persistSession: false }
-    });
-
-    const { data, error } = await supabaseAdmin
-      .from('rooms')
-      .select('tuya_device_id')
-      .eq('room_num', roomNumber) // 🛠️ แก้ไขให้ตรงกับตารางของคุณ (room_num)
-      .maybeSingle();
-
-    if (data && data.tuya_device_id) {
-      return { deviceId: data.tuya_device_id, roomNumber };
-    }
+  // 🛠️ อัปเกรด: แจ้งเตือนถ้าระบบหาตัวแปรใน Vercel ไม่เจอ
+  if (!supabaseUrl || !supabaseKey) {
+    throw new Error('Vercel Error: หาตัวแปร NEXT_PUBLIC_SUPABASE_URL หรือ SUPABASE_SECRET_KEY ไม่เจอ กรุณาตรวจสอบใน Vercel Settings');
   }
 
-  // 5. ถ้าหาไม่เจอจากทุกที่จริงๆ ค่อยโยน Error แจ้งเตือน
+  const supabaseAdmin = createClient(supabaseUrl, supabaseKey, {
+    auth: { persistSession: false }
+  });
+
+  const { data, error } = await supabaseAdmin
+    .from('rooms')
+    .select('tuya_device_id')
+    .eq('room_num', roomNumber)
+    .maybeSingle();
+
+  // 🛠️ อัปเกรด: แจ้งเตือนแบบเจาะจงถ้า Database มีปัญหาการค้นหา (เช่น ชนิดข้อมูลไม่ตรงกัน)
+  if (error) {
+    throw new Error(`Supabase Error: มีปัญหาตอนค้นหาข้อมูลห้อง ${roomNumber} (รายละเอียด: ${error.message})`);
+  }
+
+  if (data && data.tuya_device_id) {
+    return { deviceId: data.tuya_device_id, roomNumber };
+  }
+
   throw new Error(`ไม่พบ Device ID ของห้อง ${roomNumber} กรุณาตั้งค่าที่หน้า Admin หรือ Vercel`);
 }
 
@@ -349,8 +350,6 @@ async function sendDeviceCommand(
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
-
-    // 🛠️ อัปเกรด: ใส่ await เพราะฟังก์ชัน resolveDeviceId เป็นแบบเรียกฐานข้อมูลแล้ว
     const resolved = await resolveDeviceId(
       url.searchParams.get('deviceId'),
       url.searchParams.get('roomNumber')
@@ -377,8 +376,6 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const requestBody = await request.json();
-
-    // 🛠️ อัปเกรด: ใส่ await เพราะฟังก์ชัน resolveDeviceId เป็นแบบเรียกฐานข้อมูลแล้ว
     const resolved = await resolveDeviceId(
       requestBody?.deviceId,
       requestBody?.roomNumber
