@@ -12,13 +12,11 @@ export async function POST(req: Request) {
   try {
     const { rooms, promptpay } = await req.json();
 
-    // 1. บันทึกเบอร์พร้อมเพย์ (แยกทำก่อนเลย จะได้ชัวร์ว่าเซฟติดแน่นอน)
+    // 1. บันทึกพร้อมเพย์
     if (promptpay !== undefined) {
-      const { error: ppError } = await supabaseAdmin
+      await supabaseAdmin
         .from('settings')
         .upsert({ key: 'promptpay', value: String(promptpay).trim() }, { onConflict: 'key' });
-      
-      if (ppError) console.error('PromptPay Save Error:', ppError);
     }
 
     // 2. บันทึกข้อมูลห้อง (ราคา และ Device ID)
@@ -27,7 +25,7 @@ export async function POST(req: Request) {
         const roomNum = String(room.name || '').trim();
         if (!roomNum) continue;
 
-        // 🛠️ แก้ไข: ใช้ชื่อคอลัมน์ room_num ให้ตรงกับใน Supabase ของคุณเป๊ะๆ
+        // เช็คว่ามีห้องนี้ในฐานข้อมูลหรือยัง
         const { data: existingRoom } = await supabaseAdmin
           .from('rooms')
           .select('id')
@@ -35,17 +33,17 @@ export async function POST(req: Request) {
           .maybeSingle();
 
         if (existingRoom) {
-          const { error: updateErr } = await supabaseAdmin
+          // ถ้ามีแล้ว ให้อัปเดต
+          await supabaseAdmin
             .from('rooms')
             .update({
               tuya_device_id: room.deviceId || '',
               price: Number(room.price) || 350
             })
             .eq('id', existingRoom.id);
-            
-          if (updateErr) console.error(`Update Room ${roomNum} Error:`, updateErr);
         } else {
-          const { error: insertErr } = await supabaseAdmin
+          // 🛠️ ถ้ายังไม่มี ให้สร้างใหม่ (ใช้คอลัมน์ room_num ให้ตรงเป๊ะ)
+          await supabaseAdmin
             .from('rooms')
             .insert({
               room_num: roomNum,
@@ -53,15 +51,13 @@ export async function POST(req: Request) {
               price: Number(room.price) || 350,
               status: 'available'
             });
-            
-          if (insertErr) console.error(`Insert Room ${roomNum} Error:`, insertErr);
         }
       }
     }
 
-    return NextResponse.json({ success: true, message: 'บันทึกสำเร็จ' });
+    return NextResponse.json({ success: true, message: 'บันทึกข้อมูลสำเร็จ' });
   } catch (error: any) {
-    console.error('API Error:', error);
+    console.error('Update Rooms Error:', error);
     return NextResponse.json({ success: false, message: error.message }, { status: 500 });
   }
 }
