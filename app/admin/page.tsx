@@ -40,7 +40,9 @@ export default function AdminPage() {
           setRooms(prevRooms => {
             let hasChanges = false;
             const updatedRooms = prevRooms.map(room => {
-              const dbRoom = data.rooms.find((r: any) => r.room_number === room.name);
+              // 🛠️ เช็คทั้ง room_number และ room_num ป้องกันระบบหาไม่เจอ
+              const dbRoom = data.rooms.find((r: any) => String(r.room_number || r.room_num) === String(room.name));
+              
               if (dbRoom) {
                 const newStatus = dbRoom.status === 'occupied' ? 'ใช้งานอยู่' : 'ว่าง';
                 
