@@ -218,7 +218,6 @@ export async function POST(request: Request) {
     const slip2GoResponse = await fetch(apiUrl, {
       method: 'POST',
       headers: {
-        // 🛠️ แก้ไข: ต้องมีคำว่า Bearer นำหน้าตามมาตรฐาน REST API
         'Authorization': `Bearer ${secret}`,
       },
       body: slip2GoFormData,
@@ -237,7 +236,6 @@ export async function POST(request: Request) {
       slipResult.code ?? ''
     );
 
-    // API Slip2Go บางตัวส่งรหัสสำเร็จเป็น 200 หรือ 200000 
     if (
       !slip2GoResponse.ok ||
       (slipCode !== '200000' && slipCode !== '200') ||
@@ -378,6 +376,16 @@ export async function POST(request: Request) {
         },
         { status: 500 }
       );
+    }
+
+    // 🛠️ สิ่งที่เพิ่มเข้ามา: สั่งอัปเดตสถานะห้องในฐานข้อมูล Supabase ให้เป็น 'occupied' (มีลูกค้าเข้าใช้งาน)
+    const { error: updateRoomError } = await supabase
+      .from('rooms')
+      .update({ status: 'occupied' }) 
+      .eq('room_number', roomNumber);
+
+    if (updateRoomError) {
+      console.error(`ไม่สามารถอัปเดตสถานะห้อง ${roomNumber} ได้:`, updateRoomError);
     }
 
     return NextResponse.json({
