@@ -315,9 +315,7 @@ function resolveDeviceId(
   }
 
   throw new Error(
-    `ไม่พบ Device ID ของห้อง ${roomNumber}. ` +
-      `ให้ตั้ง TUYA_ROOM_DEVICES หรือ ` +
-      `TUYA_DEVICE_ID_ROOM_${roomKey} ใน Vercel`
+    `ไม่พบ Device ID ของห้อง ${roomNumber}. กรุณาใส่ Device ID ให้ถูกต้อง`
   );
 }
 
@@ -415,9 +413,6 @@ async function sendDeviceCommand(
   });
 }
 
-// ใช้ดูคำสั่งที่อุปกรณ์รองรับ:
-// GET /api/sonoff?roomNumber=101
-// หรือ GET /api/sonoff?deviceId=YOUR_DEVICE_ID
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
@@ -457,8 +452,9 @@ export async function GET(request: Request) {
 
     console.error('Tuya GET Error:', error);
 
+    // 🛠️ แก้ไข: เปลี่ยน error เป็น message
     return NextResponse.json(
-      { success: false, error: message },
+      { success: false, message: message },
       { status: 500 }
     );
   }
@@ -473,17 +469,22 @@ export async function POST(request: Request) {
       requestBody?.roomNumber
     );
 
-    const rawAction = String(
+    let rawAction = String(
       requestBody?.action || 'on'
     )
       .trim()
       .toLowerCase();
 
+    // 🛠️ แก้ไข: แปลงคำสั่งจากหน้าเว็บ 'turn-on' ให้เป็น 'on' ที่ Tuya รู้จัก
+    if (rawAction === 'turn-on') rawAction = 'on';
+    if (rawAction === 'turn-off') rawAction = 'off';
+
     if (rawAction !== 'on' && rawAction !== 'off') {
+      // 🛠️ แก้ไข: เปลี่ยน error เป็น message
       return NextResponse.json(
         {
           success: false,
-          error: 'คำสั่งต้องเป็น on หรือ off',
+          message: 'คำสั่งต้องเป็น on หรือ off',
         },
         { status: 400 }
       );
@@ -541,8 +542,9 @@ export async function POST(request: Request) {
 
     console.error('Tuya POST Error:', error);
 
+    // 🛠️ แก้ไข: เปลี่ยน error เป็น message เพื่อให้หน้าแอดมินอ่านออก
     return NextResponse.json(
-      { success: false, error: message },
+      { success: false, message: message },
       { status: 500 }
     );
   }
