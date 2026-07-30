@@ -51,7 +51,8 @@ export default function AdminPage() {
     }
   };
 
-  const fetchRoomStatus = async () => {
+  // โหลดข้อมูลทั้งหมดครั้งแรกตอนเข้าหน้าเว็บ
+  const fetchInitialData = async () => {
     try {
       const res = await fetch('/api/get-rooms');
       if (res.ok) {
@@ -60,14 +61,13 @@ export default function AdminPage() {
           setRooms(prevRooms => {
             return prevRooms.map(room => {
               const dbRoom = data.rooms.find((r: any) => String(r.room_number || r.room_num) === String(room.name));
-              
               if (dbRoom) {
                 const newStatus = dbRoom.status === 'occupied' ? 'ใช้งานอยู่' : 'ว่าง';
                 return {
                   ...room,
                   status: newStatus as 'ว่าง' | 'ใช้งานอยู่',
                   deviceId: dbRoom.tuya_device_id || room.deviceId,
-                  price: dbRoom.price !== undefined && dbRoom.price !== null ? dbRoom.price : room.price,
+                  price: dbRoom.price !== undefined && dbRoom.price !== null ? Number(dbRoom.price) : room.price,
                 };
               }
               return room;
@@ -84,6 +84,39 @@ export default function AdminPage() {
         }
       }
     } catch (err) {
+      console.error('Fetch initial data error:', err);
+    }
+  };
+
+  // ดึงเฉพาะสถานะห้องทุกๆ 5 วินาที (ไม่ไปทับราคาและ Device ID ที่กำลังพิมพ์)
+  const fetchRoomStatusOnly = async () => {
+    try {
+      const res = await fetch('/api/get-rooms');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.rooms) {
+          setRooms(prevRooms => {
+            return prevRooms.map(room => {
+              const dbRoom = data.rooms.find((r: any) => String(r.room_number || r.room_num) === String(room.name));
+              if (dbRoom) {
+                const newStatus = dbRoom.status === 'occupied' ? 'ใช้งานอยู่' : 'ว่าง';
+                if (room.status !== newStatus) {
+                  const now = new Date().toLocaleString('th-TH');
+                  return {
+                    ...room,
+                    status: newStatus as 'ว่าง' | 'ใช้งานอยู่',
+                    lastCheckIn: newStatus === 'ใช้งานอยู่' ? now : room.lastCheckIn,
+                    lastCheckOut: newStatus === 'ว่าง' ? now : room.lastCheckOut,
+                    usageCount: newStatus === 'ใช้งานอยู่' ? room.usageCount + 1 : room.usageCount
+                  };
+                }
+              }
+              return room;
+            });
+          });
+        }
+      }
+    } catch (err) {
       console.error('Fetch status error:', err);
     }
   };
@@ -91,8 +124,8 @@ export default function AdminPage() {
   useEffect(() => {
     if (!isAuthenticated) return;
 
-    fetchRoomStatus();
-    const interval = setInterval(fetchRoomStatus, 5000);
+    fetchInitialData();
+    const interval = setInterval(fetchRoomStatusOnly, 5000);
     return () => clearInterval(interval);
   }, [isAuthenticated]);
 
@@ -106,7 +139,7 @@ export default function AdminPage() {
       });
 
       if (res.ok) {
-        setStatusMsg('💾 บันทึกข้อมูลลงฐานข้อมูลกลางเรียบร้อยแล้ว!');
+        setStatusMsg('💾 บันทึกราคา เบอร์พร้อมเพย์ และ Device ID ลงฐานข้อมูลกลางเรียบร้อยแล้ว!');
       } else {
         setStatusMsg('❌ บันทึกลงฐานข้อมูลไม่สำเร็จ');
       }
