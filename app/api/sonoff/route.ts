@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createHash, createHmac } from 'node:crypto';
+import { createClient } from '@supabase/supabase-js';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -60,8 +61,7 @@ function createStringToSign(
 
 function getTuyaCredentials() {
   const clientId = process.env.TUYA_ACCESS_ID?.trim();
-  const clientSecret =
-    process.env.TUYA_ACCESS_SECRET?.trim();
+  const clientSecret = process.env.TUYA_ACCESS_SECRET?.trim();
 
   if (!clientId || !clientSecret) {
     throw new Error(
@@ -193,8 +193,7 @@ async function getDeviceFunctions(
   accessToken: string,
   deviceId: string
 ): Promise<DeviceFunctionsResult> {
-  const path =
-    `/v1.0/iot-03/devices/${encodeURIComponent(deviceId)}/functions`;
+  const path = `/v1.0/iot-03/devices/${encodeURIComponent(deviceId)}/functions`;
 
   const data = await tuyaRequest<DeviceFunctionsResult>({
     method: 'GET',
@@ -217,170 +216,111 @@ function normalizeRoomKey(value: string): string {
 
 function readRoomDeviceMap(): Record<string, string> {
   const raw = process.env.TUYA_ROOM_DEVICES?.trim();
-
   if (!raw) return {};
 
   try {
     const parsed = JSON.parse(raw);
-
-    if (
-      !parsed ||
-      typeof parsed !== 'object' ||
-      Array.isArray(parsed)
-    ) {
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       throw new Error('ต้องเป็น JSON object');
     }
 
     return Object.fromEntries(
       Object.entries(parsed)
-        .filter(
-          ([, value]) =>
-            typeof value === 'string' &&
-            value.trim().length > 0
-        )
-        .map(([key, value]) => [
-          normalizeRoomKey(key),
-          String(value).trim(),
-        ])
+        .filter(([, value]) => typeof value === 'string' && value.trim().length > 0)
+        .map(([key, value]) => [normalizeRoomKey(key), String(value).trim()])
     );
   } catch (error) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : 'JSON ไม่ถูกต้อง';
-
-    throw new Error(
-      `ค่า TUYA_ROOM_DEVICES ไม่ถูกต้อง: ${message}`
-    );
+    const message = error instanceof Error ? error.message : 'JSON ไม่ถูกต้อง';
+    throw new Error(`ค่า TUYA_ROOM_DEVICES ไม่ถูกต้อง: ${message}`);
   }
 }
 
-function resolveDeviceId(
+// 🛠️ อัปเกรด: เปลี่ยนเป็น async เพื่อให้เช็คฐานข้อมูล Supabase ได้
+async function resolveDeviceId(
   deviceIdInput: unknown,
   roomNumberInput: unknown
-): {
-  deviceId: string;
-  roomNumber: string;
-} {
-  const directDeviceId = String(
-    deviceIdInput || ''
-  ).trim();
+): Promise<{ deviceId: string; roomNumber: string; }> {
+  const directDeviceId = String(deviceIdInput || '').trim();
+  const roomNumber = String(roomNumberInput || '').trim();
 
-  const roomNumber = String(
-    roomNumberInput || ''
-  ).trim();
-
+  // 1. ถ้ามี Device ID ส่งมาตรงๆ (เช่น จากหน้าเว็บ Admin) ให้ใช้เลย
   if (directDeviceId) {
-    return {
-      deviceId: directDeviceId,
-      roomNumber,
-    };
+    return { deviceId: directDeviceId, roomNumber };
   }
 
   if (!roomNumber) {
-    throw new Error(
-      'ต้องส่ง deviceId หรือ roomNumber อย่างน้อยหนึ่งค่า'
-    );
+    throw new Error('ต้องส่ง deviceId หรือ roomNumber อย่างน้อยหนึ่งค่า');
   }
 
   const roomKey = normalizeRoomKey(roomNumber);
+
+  // 2. หาจาก TUYA_ROOM_DEVICES ใน Vercel
   const roomMap = readRoomDeviceMap();
   const mappedDeviceId = roomMap[roomKey];
-
   if (mappedDeviceId) {
-    return {
-      deviceId: mappedDeviceId,
-      roomNumber,
-    };
+    return { deviceId: mappedDeviceId, roomNumber };
   }
 
-  const perRoomEnv =
-    process.env[`TUYA_DEVICE_ID_ROOM_${roomKey}`]?.trim();
-
+  // 3. หาจาก TUYA_DEVICE_ID_ROOM_XXX ใน Vercel
+  const perRoomEnv = process.env[`TUYA_DEVICE_ID_ROOM_${roomKey}`]?.trim();
   if (perRoomEnv) {
-    return {
-      deviceId: perRoomEnv,
-      roomNumber,
-    };
+    return { deviceId: perRoomEnv, roomNumber };
   }
 
-  const singleDeviceId =
-    process.env.TUYA_DEVICE_ID?.trim();
+  // 4. 🛠️ ไม้ตายสุดท้าย: วิ่งไปหา Device ID จากฐานข้อมูล Supabase อัตโนมัติ!
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  const supabaseKey = (process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY)?.trim();
 
-  if (singleDeviceId) {
-    return {
-      deviceId: singleDeviceId,
-      roomNumber,
-    };
+  if (supabaseUrl && supabaseKey) {
+    const supabaseAdmin = createClient(supabaseUrl, supabaseKey, {
+      auth: { persistSession: false }
+    });
+
+    const { data, error } = await supabaseAdmin
+      .from('rooms')
+      .select('tuya_device_id')
+      .eq('room_number', roomNumber)
+      .maybeSingle();
+
+    if (data && data.tuya_device_id) {
+      return { deviceId: data.tuya_device_id, roomNumber };
+    }
   }
 
-  throw new Error(
-    `ไม่พบ Device ID ของห้อง ${roomNumber}. กรุณาใส่ Device ID ให้ถูกต้อง`
-  );
+  // 5. ถ้าหาไม่เจอจากทุกที่จริงๆ ค่อยโยน Error แจ้งเตือน
+  throw new Error(`ไม่พบ Device ID ของห้อง ${roomNumber} กรุณาตั้งค่าที่หน้า Admin หรือ Vercel`);
 }
 
-function getConfiguredSwitchCode(
-  roomNumber: string
-): string {
+function getConfiguredSwitchCode(roomNumber: string): string {
   const roomKey = normalizeRoomKey(roomNumber);
-
   if (roomKey) {
-    const perRoomCode =
-      process.env[
-        `TUYA_SWITCH_CODE_ROOM_${roomKey}`
-      ]?.trim();
-
+    const perRoomCode = process.env[`TUYA_SWITCH_CODE_ROOM_${roomKey}`]?.trim();
     if (perRoomCode) return perRoomCode;
   }
-
   return process.env.TUYA_SWITCH_CODE?.trim() || '';
 }
 
-function selectSwitchCode(
-  functions: DeviceFunction[]
-): string {
+function selectSwitchCode(functions: DeviceFunction[]): string {
   const booleanFunctions = functions.filter(
-    (item) =>
-      item.type?.toLowerCase() === 'boolean'
+    (item) => item.type?.toLowerCase() === 'boolean'
   );
 
   const preferredCodes = [
-    'switch_1',
-    'switch',
-    'switch_2',
-    'switch_3',
-    'switch_led',
-    'switch_usb1',
-    'switch_usb2',
-    'switch_usb3',
+    'switch_1', 'switch', 'switch_2', 'switch_3',
+    'switch_led', 'switch_usb1', 'switch_usb2', 'switch_usb3',
   ];
 
   for (const code of preferredCodes) {
-    if (
-      booleanFunctions.some(
-        (item) => item.code === code
-      )
-    ) {
+    if (booleanFunctions.some((item) => item.code === code)) {
       return code;
     }
   }
 
-  const switchLike = booleanFunctions.find(
-    (item) => /^switch(?:_|$)/i.test(item.code)
-  );
+  const switchLike = booleanFunctions.find((item) => /^switch(?:_|$)/i.test(item.code));
+  if (switchLike) return switchLike.code;
 
-  if (switchLike) {
-    return switchLike.code;
-  }
-
-  const supported = functions
-    .map((item) => `${item.code}:${item.type}`)
-    .join(', ');
-
-  throw new Error(
-    `ไม่พบคำสั่งเปิด/ปิดชนิด Boolean ของอุปกรณ์ ` +
-      `(functions: ${supported || 'ไม่มีข้อมูล'})`
-  );
+  const supported = functions.map((item) => `${item.code}:${item.type}`).join(', ');
+  throw new Error(`ไม่พบคำสั่งเปิด/ปิดชนิด Boolean ของอุปกรณ์ (functions: ${supported || 'ไม่มีข้อมูล'})`);
 }
 
 async function sendDeviceCommand(
@@ -391,16 +331,9 @@ async function sendDeviceCommand(
   commandCode: string,
   action: ControlAction
 ) {
-  const path =
-    `/v1.0/iot-03/devices/${encodeURIComponent(deviceId)}/commands`;
-
+  const path = `/v1.0/iot-03/devices/${encodeURIComponent(deviceId)}/commands`;
   const body = JSON.stringify({
-    commands: [
-      {
-        code: commandCode,
-        value: action === 'on',
-      },
-    ],
+    commands: [{ code: commandCode, value: action === 'on' }],
   });
 
   return tuyaRequest<boolean>({
@@ -417,25 +350,15 @@ export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
 
-    const resolved = resolveDeviceId(
+    // 🛠️ อัปเกรด: ใส่ await เพราะฟังก์ชัน resolveDeviceId เป็นแบบเรียกฐานข้อมูลแล้ว
+    const resolved = await resolveDeviceId(
       url.searchParams.get('deviceId'),
       url.searchParams.get('roomNumber')
     );
 
-    const { clientId, clientSecret } =
-      getTuyaCredentials();
-
-    const accessToken = await getAccessToken(
-      clientId,
-      clientSecret
-    );
-
-    const specification = await getDeviceFunctions(
-      clientId,
-      clientSecret,
-      accessToken,
-      resolved.deviceId
-    );
+    const { clientId, clientSecret } = getTuyaCredentials();
+    const accessToken = await getAccessToken(clientId, clientSecret);
+    const specification = await getDeviceFunctions(clientId, clientSecret, accessToken, resolved.deviceId);
 
     return NextResponse.json({
       success: true,
@@ -445,18 +368,9 @@ export async function GET(request: Request) {
       functions: specification.functions || [],
     });
   } catch (error: unknown) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : 'เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ';
-
+    const message = error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ';
     console.error('Tuya GET Error:', error);
-
-    // 🛠️ แก้ไข: เปลี่ยน error เป็น message
-    return NextResponse.json(
-      { success: false, message: message },
-      { status: 500 }
-    );
+    return NextResponse.json({ success: false, message: message }, { status: 500 });
   }
 }
 
@@ -464,67 +378,34 @@ export async function POST(request: Request) {
   try {
     const requestBody = await request.json();
 
-    const resolved = resolveDeviceId(
+    // 🛠️ อัปเกรด: ใส่ await เพราะฟังก์ชัน resolveDeviceId เป็นแบบเรียกฐานข้อมูลแล้ว
+    const resolved = await resolveDeviceId(
       requestBody?.deviceId,
       requestBody?.roomNumber
     );
 
-    let rawAction = String(
-      requestBody?.action || 'on'
-    )
-      .trim()
-      .toLowerCase();
-
-    // 🛠️ แก้ไข: แปลงคำสั่งจากหน้าเว็บ 'turn-on' ให้เป็น 'on' ที่ Tuya รู้จัก
+    let rawAction = String(requestBody?.action || 'on').trim().toLowerCase();
     if (rawAction === 'turn-on') rawAction = 'on';
     if (rawAction === 'turn-off') rawAction = 'off';
 
     if (rawAction !== 'on' && rawAction !== 'off') {
-      // 🛠️ แก้ไข: เปลี่ยน error เป็น message
       return NextResponse.json(
-        {
-          success: false,
-          message: 'คำสั่งต้องเป็น on หรือ off',
-        },
+        { success: false, message: 'คำสั่งต้องเป็น on หรือ off' },
         { status: 400 }
       );
     }
 
     const action = rawAction as ControlAction;
+    const { clientId, clientSecret } = getTuyaCredentials();
+    const accessToken = await getAccessToken(clientId, clientSecret);
 
-    const { clientId, clientSecret } =
-      getTuyaCredentials();
-
-    const accessToken = await getAccessToken(
-      clientId,
-      clientSecret
-    );
-
-    let commandCode = getConfiguredSwitchCode(
-      resolved.roomNumber
-    );
-
+    let commandCode = getConfiguredSwitchCode(resolved.roomNumber);
     if (!commandCode) {
-      const specification = await getDeviceFunctions(
-        clientId,
-        clientSecret,
-        accessToken,
-        resolved.deviceId
-      );
-
-      commandCode = selectSwitchCode(
-        specification.functions || []
-      );
+      const specification = await getDeviceFunctions(clientId, clientSecret, accessToken, resolved.deviceId);
+      commandCode = selectSwitchCode(specification.functions || []);
     }
 
-    const result = await sendDeviceCommand(
-      clientId,
-      clientSecret,
-      accessToken,
-      resolved.deviceId,
-      commandCode,
-      action
-    );
+    const result = await sendDeviceCommand(clientId, clientSecret, accessToken, resolved.deviceId, commandCode, action);
 
     return NextResponse.json({
       success: true,
@@ -535,17 +416,8 @@ export async function POST(request: Request) {
       result: result.result,
     });
   } catch (error: unknown) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : 'เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ';
-
+    const message = error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ';
     console.error('Tuya POST Error:', error);
-
-    // 🛠️ แก้ไข: เปลี่ยน error เป็น message เพื่อให้หน้าแอดมินอ่านออก
-    return NextResponse.json(
-      { success: false, message: message },
-      { status: 500 }
-    );
+    return NextResponse.json({ success: false, message: message }, { status: 500 });
   }
 }
