@@ -9,7 +9,7 @@ export const dynamic = 'force-dynamic';
 
 // URL สำหรับตรวจสลิปด้วย "รูปภาพ" (REST API)
 const DEFAULT_SLIP2GO_API_URL =
-  'https://connect.slip2go.com/api/verify-slip/image/info'; // <-- วางลิงก์ที่ก๊อปปี้มาตรงนี้ครับ
+  'https://connect.slip2go.com/api/verify-slip/qr-image/info';
 
 type Slip2GoData = {
   referenceId?: string;
