@@ -33,7 +33,6 @@ export default function AdminPage() {
   const [statusMsg, setStatusMsg] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
-  // เช็ครหัสผ่านที่เคยกรอกไว้ในเครื่องนี้
   useEffect(() => {
     const auth = sessionStorage.getItem('admin_authenticated');
     if (auth === 'true') {
@@ -52,7 +51,6 @@ export default function AdminPage() {
     }
   };
 
-  // ดึงข้อมูลห้องและการตั้งค่าจาก Supabase
   const fetchRoomStatus = async () => {
     try {
       const res = await fetch('/api/get-rooms');
@@ -78,7 +76,6 @@ export default function AdminPage() {
         }
       }
 
-      // ดึงเบอร์พร้อมเพย์จาก Supabase
       const ppRes = await fetch('/api/get-promptpay');
       if (ppRes.ok) {
         const ppData = await ppRes.json();
@@ -109,7 +106,7 @@ export default function AdminPage() {
       });
 
       if (res.ok) {
-        setStatusMsg('💾 บันทึกข้อมูลลงฐานข้อมูลกลางเรียบร้อยแล้ว ทุกเครื่องจะอัปเดตทันที!');
+        setStatusMsg('💾 บันทึกข้อมูลลงฐานข้อมูลกลางเรียบร้อยแล้ว!');
       } else {
         setStatusMsg('❌ บันทึกลงฐานข้อมูลไม่สำเร็จ');
       }
@@ -190,7 +187,6 @@ export default function AdminPage() {
   const totalIncome = rooms.reduce((sum, r) => sum + (r.usageCount * r.price), 0);
   const totalCheckIns = rooms.reduce((sum, r) => sum + r.usageCount, 0);
 
-  // หน้าจอกรอกรหัสผ่านก่อนเข้าใช้งาน
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-blue-900 flex items-center justify-center px-4 font-sans">
@@ -202,7 +198,7 @@ export default function AdminPage() {
               type="password" 
               value={passwordInput} 
               onChange={(e) => setPasswordInput(e.target.value)} 
-              placeholder="🔑 กรอกรหัสผ่าน (SG1234)" 
+              placeholder="🔑 กรอกรหัสผ่านผู้ดูแลระบบ" 
               className="w-full p-3 border-2 border-blue-400 rounded-xl mb-4 text-center font-bold text-xl text-gray-900 bg-white placeholder-gray-400 focus:outline-none focus:border-blue-600"
               autoFocus
             />
