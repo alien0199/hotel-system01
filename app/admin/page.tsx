@@ -30,6 +30,50 @@ export default function AdminPage() {
   const [statusMsg, setStatusMsg] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
+  // 🔄 ระบบดึงข้อมูลและอัปเดตสถานะอัตโนมัติจาก Supabase
+  const fetchRoomStatus = async () => {
+    try {
+      const res = await fetch('/api/get-rooms');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.rooms) {
+          setRooms(prevRooms => {
+            let hasChanges = false;
+            const updatedRooms = prevRooms.map(room => {
+              const dbRoom = data.rooms.find((r: any) => r.room_number === room.name);
+              if (dbRoom) {
+                const newStatus = dbRoom.status === 'occupied' ? 'ใช้งานอยู่' : 'ว่าง';
+                
+                // ถ้าสถานะในฐานข้อมูลไม่ตรงกับหน้าจอ (แปลว่ามีลูกค้าเข้า/ออก) ให้เปลี่ยนสถานะ
+                if (room.status !== newStatus) {
+                  hasChanges = true;
+                  const now = new Date().toLocaleString('th-TH');
+                  
+                  return {
+                    ...room,
+                    status: newStatus,
+                    deviceId: dbRoom.tuya_device_id || room.deviceId,
+                    lastCheckIn: newStatus === 'ใช้งานอยู่' ? now : room.lastCheckIn,
+                    lastCheckOut: newStatus === 'ว่าง' ? now : room.lastCheckOut,
+                    usageCount: newStatus === 'ใช้งานอยู่' ? room.usageCount + 1 : room.usageCount
+                  };
+                }
+              }
+              return room;
+            });
+
+            if (hasChanges) {
+              localStorage.setItem('singburi_grand_rooms_v2', JSON.stringify(updatedRooms));
+            }
+            return updatedRooms;
+          });
+        }
+      }
+    } catch (err) {
+      console.error('Fetch status error:', err);
+    }
+  };
+
   useEffect(() => {
     const savedRooms = localStorage.getItem('singburi_grand_rooms_v2');
     const savedPP = localStorage.getItem('singburi_promptpay');
@@ -38,16 +82,21 @@ export default function AdminPage() {
     else setRooms(defaultRooms);
     
     if (savedPP) setPromptpay(savedPP);
+
+    // 1. ดึงข้อมูลครั้งแรกตอนโหลดหน้าเว็บ
+    fetchRoomStatus();
+    
+    // 2. ตั้งเวลาให้รีเฟรชเช็คสถานะห้องทุกๆ 5 วินาที
+    const interval = setInterval(fetchRoomStatus, 5000);
+    return () => clearInterval(interval);
   }, []);
 
-  // 🛠️ อัปเดตฟังก์ชันนี้: บันทึกลงเครื่อง + ส่งไป Supabase
   const handleSaveData = async () => {
     setStatusMsg('⏳ กำลังบันทึกข้อมูล...');
     try {
       localStorage.setItem('singburi_grand_rooms_v2', JSON.stringify(rooms));
       localStorage.setItem('singburi_promptpay', promptpay);
 
-      // ส่งไปบันทึกลง Supabase
       const res = await fetch('/api/update-rooms', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -74,6 +123,16 @@ export default function AdminPage() {
       const resetRooms = rooms.map(r => ({ ...r, usageCount: 0, status: 'ว่าง' as const, lastCheckIn: null, lastCheckOut: null }));
       setRooms(resetRooms);
       localStorage.setItem('singburi_grand_rooms_v2', JSON.stringify(resetRooms));
+      
+      // อัปเดตฐานข้อมูลให้เป็นว่างทั้งหมดด้วย
+      resetRooms.forEach(room => {
+        fetch('/api/get-rooms', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roomNumber: room.name, status: 'available' }),
+        });
+      });
+
       setStatusMsg('🔄 รีเซ็ตข้อมูลรายวันเรียบร้อยแล้ว');
     }
   };
@@ -97,10 +156,20 @@ export default function AdminPage() {
       if (res.ok && data.success) {
         setStatusMsg(`✅ สำเร็จ: ไฟห้อง ${room.name} ถูก ${action === 'turn-on' ? 'เปิด' : 'ปิด'} แล้ว`);
         
+        const newStatus = action === 'turn-on' ? 'ใช้งานอยู่' : 'ว่าง';
+        const dbStatus = action === 'turn-on' ? 'occupied' : 'available';
+
+        // 🛠️ ส่งข้อมูลอัปเดตสถานะไปที่ฐานข้อมูลด้วย (Admin กดเอง)
+        fetch('/api/get-rooms', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roomNumber: room.name, status: dbStatus }),
+        });
+        
         const updated = rooms.map(r => {
           if (r.id === room.id) {
-            if (action === 'turn-on') return { ...r, status: 'ใช้งานอยู่' as const, lastCheckIn: now, usageCount: r.usageCount + 1 };
-            else return { ...r, status: 'ว่าง' as const, lastCheckOut: now };
+            if (action === 'turn-on') return { ...r, status: newStatus as const, lastCheckIn: now, usageCount: r.usageCount + 1 };
+            else return { ...r, status: newStatus as const, lastCheckOut: now };
           }
           return r;
         });
@@ -184,7 +253,7 @@ export default function AdminPage() {
               </div>
 
               <div className="p-4">
-                <div className={`text-center py-2 mb-4 rounded-lg font-bold text-lg ${room.status === 'ว่าง' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                <div className={`text-center py-2 mb-4 rounded-lg font-bold text-lg transition-colors duration-500 ${room.status === 'ว่าง' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
                   สถานะ: {room.status === 'ว่าง' ? '🟢 ว่างพร้อมให้บริการ' : '🔴 มีลูกค้า (กำลังใช้งาน)'}
                 </div>
 
