@@ -265,7 +265,6 @@ async function resolveDeviceId(
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
   const supabaseKey = (process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY)?.trim();
 
-  // 🛠️ อัปเกรด: แจ้งเตือนถ้าระบบหาตัวแปรใน Vercel ไม่เจอ
   if (!supabaseUrl || !supabaseKey) {
     throw new Error('Vercel Error: หาตัวแปร NEXT_PUBLIC_SUPABASE_URL หรือ SUPABASE_SECRET_KEY ไม่เจอ กรุณาตรวจสอบใน Vercel Settings');
   }
@@ -277,10 +276,9 @@ async function resolveDeviceId(
   const { data, error } = await supabaseAdmin
     .from('rooms')
     .select('tuya_device_id')
-    .eq('room_num', roomNumber)
+    .eq('room_number', roomNumber)
     .maybeSingle();
 
-  // 🛠️ อัปเกรด: แจ้งเตือนแบบเจาะจงถ้า Database มีปัญหาการค้นหา (เช่น ชนิดข้อมูลไม่ตรงกัน)
   if (error) {
     throw new Error(`Supabase Error: มีปัญหาตอนค้นหาข้อมูลห้อง ${roomNumber} (รายละเอียด: ${error.message})`);
   }
