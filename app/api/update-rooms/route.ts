@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
-// เชื่อมต่อ Supabase
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SECRET_KEY!
@@ -13,25 +12,22 @@ export async function POST(req: Request) {
 
     for (const room of rooms) {
       if (room.deviceId) {
-        // เช็คว่ามีข้อมูลห้องนี้ในระบบหรือยัง
         const { data: existingRoom } = await supabaseAdmin
           .from('rooms')
           .select('id')
-          .eq('room_number', room.name)
+          .eq('room_num', room.name) // 🛠️ แก้เป็น room_num ให้ตรงกับ DB
           .maybeSingle();
 
         if (existingRoom) {
-          // ถ้ามีแล้ว ให้อัปเดต Device ID ใหม่เข้าไป
           await supabaseAdmin
             .from('rooms')
             .update({ tuya_device_id: room.deviceId })
-            .eq('room_number', room.name);
+            .eq('room_num', room.name); // 🛠️ แก้เป็น room_num
         } else {
-          // ถ้ายังไม่มี ให้เพิ่มห้องใหม่ลงฐานข้อมูล
           await supabaseAdmin
             .from('rooms')
             .insert({ 
-              room_number: room.name, 
+              room_num: room.name, // 🛠️ แก้เป็น room_num
               tuya_device_id: room.deviceId 
             });
         }
