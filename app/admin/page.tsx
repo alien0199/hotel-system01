@@ -53,7 +53,8 @@ export default function AdminPage() {
                   
                   return {
                     ...room,
-                    status: newStatus,
+                    // 🛠️ แก้ไข: บังคับ Type ให้ตรงกับที่ TypeScript ต้องการเป๊ะๆ
+                    status: newStatus as 'ว่าง' | 'ใช้งานอยู่', 
                     deviceId: dbRoom.tuya_device_id || room.deviceId,
                     lastCheckIn: newStatus === 'ใช้งานอยู่' ? now : room.lastCheckIn,
                     lastCheckOut: newStatus === 'ว่าง' ? now : room.lastCheckOut,
