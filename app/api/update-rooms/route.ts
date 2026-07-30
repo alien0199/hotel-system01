@@ -15,19 +15,19 @@ export async function POST(req: Request) {
         const { data: existingRoom } = await supabaseAdmin
           .from('rooms')
           .select('id')
-          .eq('room_num', room.name) // 🛠️ แก้เป็น room_num ให้ตรงกับ DB
+          .eq('room_number', room.name)
           .maybeSingle();
 
         if (existingRoom) {
           await supabaseAdmin
             .from('rooms')
             .update({ tuya_device_id: room.deviceId })
-            .eq('room_num', room.name); // 🛠️ แก้เป็น room_num
+            .eq('room_number', room.name);
         } else {
           await supabaseAdmin
             .from('rooms')
             .insert({ 
-              room_num: room.name, // 🛠️ แก้เป็น room_num
+              room_number: room.name,
               tuya_device_id: room.deviceId 
             });
         }
