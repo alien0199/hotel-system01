@@ -6,8 +6,14 @@ export const revalidate = 0;
 
 export async function POST(req: Request) {
   try {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+    // 🔍 DEBUG ชั่วคราว: ล็อกแค่บางส่วนของ URL เพื่อยืนยันว่าแอปที่ deploy จริง
+    // เชื่อมกับ Supabase โปรเจกต์ไหนอยู่ (เทียบกับรหัสโปรเจกต์ใน Dashboard URL)
+    // ลบบรรทัดนี้ทิ้งได้หลังจากตรวจสอบเสร็จแล้ว
+    console.log('DEBUG Supabase project ref:', supabaseUrl.replace('https://', '').split('.')[0]);
+
     const supabaseAdmin = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      supabaseUrl,
       (process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY)!,
       {
         auth: {
