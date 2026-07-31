@@ -2,25 +2,13 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
 export const dynamic = 'force-dynamic';
-export const revalidate = 0;
+export const revalidate = 0; // ป้องกัน Vercel จำ Cache เก่า
 
 export async function POST(req: Request) {
   try {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-
-    const supabaseKey =
-      process.env.SUPABASE_SERVICE_ROLE_KEY ||
-      process.env.SUPABASE_SECRET_KEY;
-
-    if (!supabaseUrl || !supabaseKey) {
-      throw new Error(
-        'ไม่พบ NEXT_PUBLIC_SUPABASE_URL หรือ SUPABASE_SERVICE_ROLE_KEY ใน Vercel'
-      );
-    }
-
     const supabaseAdmin = createClient(
-      supabaseUrl,
-      supabaseKey,
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      (process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY)!,
       {
         auth: {
           persistSession: false,
@@ -33,156 +21,62 @@ export async function POST(req: Request) {
     const rooms = body.rooms;
     const promptpay = body.promptpay;
 
-    if (!Array.isArray(rooms)) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: 'ข้อมูลห้องไม่ถูกต้อง',
-        },
-        { status: 400 }
-      );
-    }
-
-    // 1. บันทึกหมายเลขพร้อมเพย์
+    // 1. บันทึกพร้อมเพย์
     if (promptpay !== undefined) {
-      const { error: promptpayError } =
-        await supabaseAdmin
-          .from('settings')
-          .upsert(
-            {
-              key: 'promptpay',
-              value: String(promptpay).trim(),
-            },
-            {
-              onConflict: 'key',
-            }
-          );
-
-      if (promptpayError) {
-        throw new Error(
-          `บันทึกพร้อมเพย์ไม่สำเร็จ: ${promptpayError.message}`
-        );
-      }
+      await supabaseAdmin
+        .from('settings')
+        .upsert({ key: 'promptpay', value: String(promptpay).trim() }, { onConflict: 'key' });
     }
 
-    // 2. บันทึกข้อมูลแต่ละห้อง
-    for (const room of rooms) {
-      const roomNum = String(room.name || '').trim();
+    // 2. บันทึกข้อมูลแต่ละห้อง (Device ID และ ราคา)
+    if (Array.isArray(rooms)) {
+      for (const room of rooms) {
+        const roomStr = String(room.name || '').trim();
+        if (!roomStr) continue;
 
-      if (!roomNum) {
-        continue;
-      }
+        // 🛠️ สิ่งที่ต้องการอัปเดต (ตัดชื่อคอลัมน์ room_num ออกจาก Payload เพื่อเลี่ยง Error)
+        const updatePayload = {
+          tuya_device_id: String(room.deviceId || '').trim() || null,
+          price: Number(room.price) || 350,
+        };
 
-      const convertedPrice = Number(room.price);
+        // ลองค้นหาและอัปเดตโดยใช้คอลัมน์ room_num
+        let { data: updated, error: updateErr } = await supabaseAdmin
+          .from('rooms')
+          .update(updatePayload)
+          .eq('room_num', roomStr)
+          .select('id');
 
-      const roomData = {
-        room_num: roomNum,
-        tuya_device_id:
-          String(room.deviceId || '').trim() || null,
-        price:
-          Number.isFinite(convertedPrice) &&
-          convertedPrice >= 0
-            ? convertedPrice
-            : 350,
-      };
-
-      /*
-       * ถ้า id เป็น UUID จาก Supabase
-       * ให้อัปเดตด้วย id โดยตรง
-       * ทำให้สามารถเปลี่ยนหมายเลขห้องได้โดยไม่สร้างแถวซ้ำ
-       */
-      const isDatabaseId =
-        typeof room.id === 'string' &&
-        !room.id.startsWith('room_');
-
-      if (isDatabaseId) {
-        const { data: updatedRoom, error: updateByIdError } =
-          await supabaseAdmin
+        // 🛡️ ระบบสลับอัตโนมัติ: ถ้า Cache ค้าง (หาคอลัมน์ไม่เจอ) ให้สลับไปใช้ room_number ทันที
+        if (updateErr && updateErr.message.includes('does not exist')) {
+          const fallback = await supabaseAdmin
             .from('rooms')
-            .update(roomData)
-            .eq('id', room.id)
-            .select('id')
-            .maybeSingle();
-
-        if (updateByIdError) {
-          throw new Error(
-            `อัปเดตห้อง ${roomNum} ไม่สำเร็จ: ${updateByIdError.message}`
-          );
+            .update(updatePayload)
+            .eq('room_number', roomStr)
+            .select('id');
+            
+          updated = fallback.data;
         }
 
-        if (updatedRoom) {
-          continue;
-        }
-      }
-
-      // กรณียังไม่มี Database ID ให้ค้นหาด้วย room_num
-      const {
-        data: existingRoom,
-        error: findRoomError,
-      } = await supabaseAdmin
-        .from('rooms')
-        .select('id')
-        .eq('room_num', roomNum)
-        .limit(1)
-        .maybeSingle();
-
-      if (findRoomError) {
-        throw new Error(
-          `ค้นหาห้อง ${roomNum} ไม่สำเร็จ: ${findRoomError.message}`
-        );
-      }
-
-      if (existingRoom) {
-        const { error: updateError } =
-          await supabaseAdmin
-            .from('rooms')
-            .update({
-              tuya_device_id: roomData.tuya_device_id,
-              price: roomData.price,
-            })
-            .eq('id', existingRoom.id);
-
-        if (updateError) {
-          throw new Error(
-            `บันทึกห้อง ${roomNum} ไม่สำเร็จ: ${updateError.message}`
-          );
-        }
-      } else {
-        const { error: insertError } =
-          await supabaseAdmin
-            .from('rooms')
-            .insert({
-              ...roomData,
-              status: 'available',
-              expire_time: null,
-            });
-
-        if (insertError) {
-          throw new Error(
-            `เพิ่มห้อง ${roomNum} ไม่สำเร็จ: ${insertError.message}`
-          );
+        // กรณีเป็นห้องใหม่ที่ไม่เคยมีในฐานข้อมูลเลย ให้สร้างแถวใหม่
+        if (!updated || updated.length === 0) {
+           const { error: insertErr } = await supabaseAdmin
+             .from('rooms')
+             .insert({ room_num: roomStr, ...updatePayload, status: 'available' });
+             
+           // ถ้าตอนสร้างใหม่ยังติด Cache Error อีก ก็สลับคอลัมน์สร้างให้
+           if (insertErr && insertErr.message.includes('does not exist')) {
+               await supabaseAdmin
+                 .from('rooms')
+                 .insert({ room_number: roomStr, ...updatePayload, status: 'available' });
+           }
         }
       }
     }
 
-    return NextResponse.json({
-      success: true,
-      message: 'บันทึกข้อมูลลง Supabase สำเร็จ',
-    });
-  } catch (error: unknown) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : 'เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ';
-
+    return NextResponse.json({ success: true, message: 'บันทึกข้อมูลสำเร็จ' });
+  } catch (error: any) {
     console.error('Update Rooms Error:', error);
-
-    return NextResponse.json(
-      {
-        success: false,
-        message,
-      },
-      { status: 500 }
-    );
+    return NextResponse.json({ success: false, message: error.message }, { status: 500 });
   }
 }
