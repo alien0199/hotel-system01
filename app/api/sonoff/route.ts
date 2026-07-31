@@ -266,28 +266,33 @@ async function resolveDeviceId(
   const supabaseKey = (process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY)?.trim();
 
   if (!supabaseUrl || !supabaseKey) {
-    throw new Error('Vercel Error: หาตัวแปร NEXT_PUBLIC_SUPABASE_URL หรือ SUPABASE_SECRET_KEY ไม่เจอ กรุณาตรวจสอบใน Vercel Settings');
+    throw new Error('Vercel Error: หาตัวแปร NEXT_PUBLIC_SUPABASE_URL หรือ SUPABASE_SECRET_KEY ไม่เจอ');
   }
 
   const supabaseAdmin = createClient(supabaseUrl, supabaseKey, {
     auth: { persistSession: false }
   });
 
-  const { data, error } = await supabaseAdmin
+  // 🛠️ ค้นหาแบบ Fallback กันเหนียว (หา room_num ก่อน ถ้าไม่มีค่อยหา room_number)
+  let existingRoom = await supabaseAdmin
     .from('rooms')
     .select('tuya_device_id')
-    .eq('room_number', roomNumber)
+    .eq('room_num', roomNumber)
     .maybeSingle();
 
-  if (error) {
-    throw new Error(`Supabase Error: มีปัญหาตอนค้นหาข้อมูลห้อง ${roomNumber} (รายละเอียด: ${error.message})`);
+  if (existingRoom.error && existingRoom.error.message.includes('does not exist')) {
+    existingRoom = await supabaseAdmin
+      .from('rooms')
+      .select('tuya_device_id')
+      .eq('room_number', roomNumber)
+      .maybeSingle();
   }
 
-  if (data && data.tuya_device_id) {
-    return { deviceId: data.tuya_device_id, roomNumber };
+  if (existingRoom.data && existingRoom.data.tuya_device_id) {
+    return { deviceId: existingRoom.data.tuya_device_id, roomNumber };
   }
 
-  throw new Error(`ไม่พบ Device ID ของห้อง ${roomNumber} กรุณาตั้งค่าที่หน้า Admin หรือ Vercel`);
+  throw new Error(`ไม่พบ Device ID ของห้อง ${roomNumber} กรุณาตั้งค่าที่หน้า Admin`);
 }
 
 function getConfiguredSwitchCode(roomNumber: string): string {
@@ -318,8 +323,7 @@ function selectSwitchCode(functions: DeviceFunction[]): string {
   const switchLike = booleanFunctions.find((item) => /^switch(?:_|$)/i.test(item.code));
   if (switchLike) return switchLike.code;
 
-  const supported = functions.map((item) => `${item.code}:${item.type}`).join(', ');
-  throw new Error(`ไม่พบคำสั่งเปิด/ปิดชนิด Boolean ของอุปกรณ์ (functions: ${supported || 'ไม่มีข้อมูล'})`);
+  throw new Error(`ไม่พบคำสั่งเปิด/ปิดชนิด Boolean ของอุปกรณ์`);
 }
 
 async function sendDeviceCommand(
@@ -400,7 +404,41 @@ export async function POST(request: Request) {
       commandCode = selectSwitchCode(specification.functions || []);
     }
 
+    // 1. ส่งคำสั่งเปิด-ปิดไฟไปที่ Tuya
     const result = await sendDeviceCommand(clientId, clientSecret, accessToken, resolved.deviceId, commandCode, action);
+
+    // 2. 🛠️ ส่วนที่เสริมเข้ามาใหม่: จดเวลาหมดอายุลงฐานข้อมูล Supabase
+    if (resolved.roomNumber) {
+        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+        const supabaseKey = (process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY)?.trim();
+        
+        if (supabaseUrl && supabaseKey) {
+            const supabaseAdmin = createClient(supabaseUrl, supabaseKey, {
+                auth: { persistSession: false }
+            });
+
+            // คำนวณเวลา: ถ้าเปิดไฟ = เวลาปัจจุบันบวก 2 ชั่วโมง, ถ้าปิดไฟ = เคลียร์ค่าทิ้ง
+            let expireTime = null;
+            if (action === 'on') {
+                // 💡 ตรงนี้คือตัวคูณเวลา: 2 (ชั่วโมง) x 60 (นาที) x 60 (วินาที) x 1000 (มิลลิวินาที)
+                expireTime = new Date(Date.now() + (2 * 60 * 60 * 1000)).toISOString();
+            }
+
+            // นำเวลาที่คำนวณได้ไปอัปเดตลงตาราง rooms
+            const { error: updateErr } = await supabaseAdmin
+                .from('rooms')
+                .update({ expire_tim: expireTime })
+                .eq('room_num', resolved.roomNumber);
+
+            // ระบบสลับคอลัมน์อัตโนมัติ (เผื่อ Cache ค้าง)
+            if (updateErr && updateErr.message.includes('does not exist')) {
+                await supabaseAdmin
+                    .from('rooms')
+                    .update({ expire_tim: expireTime })
+                    .eq('room_number', resolved.roomNumber);
+            }
+        }
+    }
 
     return NextResponse.json({
       success: true,
