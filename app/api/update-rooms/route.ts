@@ -6,14 +6,8 @@ export const revalidate = 0;
 
 export async function POST(req: Request) {
   try {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    // 🔍 DEBUG ชั่วคราว: ล็อกแค่บางส่วนของ URL เพื่อยืนยันว่าแอปที่ deploy จริง
-    // เชื่อมกับ Supabase โปรเจกต์ไหนอยู่ (เทียบกับรหัสโปรเจกต์ใน Dashboard URL)
-    // ลบบรรทัดนี้ทิ้งได้หลังจากตรวจสอบเสร็จแล้ว
-    console.log('DEBUG Supabase project ref:', supabaseUrl.replace('https://', '').split('.')[0]);
-
     const supabaseAdmin = createClient(
-      supabaseUrl,
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
       (process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY)!,
       {
         auth: {
@@ -54,7 +48,7 @@ export async function POST(req: Request) {
         const { data: existingRooms, error: findErr } = await supabaseAdmin
           .from('rooms')
           .select('id')
-          .eq('room_num', roomStr);
+          .eq('room_number', roomStr);
 
         if (findErr) {
           // ⚠️ จุดนี้คือจุดที่หายไปเงียบๆ ก่อนหน้านี้ — ถ้า select พังตรงนี้
@@ -89,7 +83,7 @@ export async function POST(req: Request) {
           // 🛡️ ถ้าหาไม่เจอจริงๆ ค่อยสร้างใหม่แค่แถวเดียว
           const { error: insertErr } = await supabaseAdmin
             .from('rooms')
-            .insert({ room_num: roomStr, ...updatePayload, status: 'available' });
+            .insert({ room_number: roomStr, ...updatePayload, status: 'available' });
 
           if (insertErr) {
             console.error(`Insert room "${roomStr}" error:`, insertErr);
