@@ -355,7 +355,7 @@ async function sendDeviceCommand(
  * (กันไม่ให้ระบบเปิดไฟล้มเหลวทั้งหมดเพียงเพราะอ่านค่าตั้งเวลาไม่ได้)
  */
 async function getAutoOffHours(
-  supabaseAdmin: ReturnType<typeof createClient>
+  supabaseAdmin: any
 ): Promise<number> {
   const DEFAULT_HOURS = 2;
 
