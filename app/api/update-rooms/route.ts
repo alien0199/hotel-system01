@@ -49,56 +49,31 @@ export async function POST(req: Request) {
           price: Number(room.price) || 350,
         };
 
-        // ลองอัปเดตด้วย room_num ก่อน
+        // ✅ ยืนยันจาก Table Editor ของ Supabase แล้วว่าคอลัมน์จริงในตาราง rooms
+        // คือ "room_num" (เห็นในภาพหน้าจอ) — คอลัมน์นี้มีอยู่จริงในฐานข้อมูล
+        // แต่ error PGRST204 "Could not find the column ... in the schema cache"
+        // ที่เจอ เกิดจาก PostgREST schema cache ค้าง (ยังไม่รู้จักคอลัมน์นี้)
+        // ไม่ใช่เพราะคอลัมน์ไม่มีจริง วิธีแก้ต้อง reload schema cache ที่ฝั่ง
+        // Supabase (รัน NOTIFY pgrst, 'reload schema'; ใน SQL editor) ไม่ใช่แก้ชื่อคอลัมน์ในโค้ด
+        const ROOM_COLUMN = 'room_num';
+
         let { data: updated, error: updateErr } = await supabaseAdmin
           .from('rooms')
           .update(updatePayload)
-          .eq('room_num', roomStr)
+          .eq(ROOM_COLUMN, roomStr)
           .select('id');
-
-        // ถ้าคอลัมน์ room_num ไม่มีจริง (schema cache ค้าง) ค่อยสลับไปใช้ room_number
-        if (updateErr && updateErr.message.includes('does not exist')) {
-          const fallback = await supabaseAdmin
-            .from('rooms')
-            .update(updatePayload)
-            .eq('room_number', roomStr)
-            .select('id');
-
-          updated = fallback.data;
-          updateErr = fallback.error;
-        }
-
-        // ⚠️ จุดสำคัญที่ทำให้ข้อมูล "รีเซ็ตกลับเป็นค่าเริ่มต้น":
-        // โค้ดเดิมเช็คแค่ error message ที่มีคำว่า "does not exist" เท่านั้น
-        // ถ้า error เป็นสาเหตุอื่น (เช่น type mismatch, RLS, network) มันจะถูก "กลืน" หายไปเงียบๆ
-        // แล้วโค้ดจะเห็นว่า updated ว่าง (เพราะ error ทำให้ data เป็น null)
-        // จึงคิดว่า "ห้องนี้ยังไม่มีในฐานข้อมูล" แล้วไป INSERT แถวใหม่
-        // ซึ่ง INSERT นั้นจะตั้ง status: 'available' เสมอ
-        // -> ห้องที่มีลูกค้าค้างอยู่ (status ไม่ใช่ available) จะถูกสร้างซ้ำเป็นแถวใหม่
-        //    ที่มีสถานะ available และค่า default ทั้งหมด แทนที่จะอัปเดตแถวเดิม
-        // ทำให้ดูเหมือนข้อมูล "หายกลับไปเริ่มต้น" ทุกครั้งที่กด save
 
         if (updateErr) {
           console.error(`Update room "${roomStr}" error:`, updateErr);
         }
 
         if (!updateErr && (!updated || updated.length === 0)) {
-          // เข้ามาตรงนี้ได้ก็ต่อเมื่อ "ไม่มี error จริงๆ" และหาแถวไม่เจอจริงๆ เท่านั้น
-          // (กันไม่ให้ error อื่นๆ ที่ไม่ใช่ "หาห้องไม่เจอ" ถูกตีความเป็น insert ใหม่)
+          // ไม่มี error และไม่เจอห้องนี้จริงๆ -> เป็นห้องใหม่ ต้อง insert
           const { error: insertErr } = await supabaseAdmin
             .from('rooms')
-            .insert({ room_num: roomStr, ...updatePayload, status: 'available' });
+            .insert({ [ROOM_COLUMN]: roomStr, ...updatePayload, status: 'available' });
 
-          if (insertErr && insertErr.message.includes('does not exist')) {
-            const fb = await supabaseAdmin
-              .from('rooms')
-              .insert({ room_number: roomStr, ...updatePayload, status: 'available' });
-            if (fb.error) {
-              console.error(`Insert room "${roomStr}" error:`, fb.error);
-              roomResults.push({ room: roomStr, ok: false, error: fb.error.message });
-              continue;
-            }
-          } else if (insertErr) {
+          if (insertErr) {
             console.error(`Insert room "${roomStr}" error:`, insertErr);
             roomResults.push({ room: roomStr, ok: false, error: insertErr.message });
             continue;
