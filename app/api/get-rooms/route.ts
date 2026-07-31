@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
 export const dynamic = 'force-dynamic';
-export const revalidate = 0; // 🛠️ ป้องกัน Vercel จำ Cache เก่า
+export const revalidate = 0; // ป้องกัน Vercel จำ Cache เก่า
 
 export async function GET() {
   try {
@@ -17,12 +17,9 @@ export async function GET() {
       }
     );
 
-    // ดึงข้อมูลทั้งหมด 
+    // ดึงข้อมูลทั้งหมด (*) ตัดปัญหาหาชื่อคอลัมน์ไม่เจอ
     const { data, error } = await supabaseAdmin.from('rooms').select('*');
-    
-    if (error) {
-        throw error;
-    }
+    if (error) throw error;
     
     return NextResponse.json({ success: true, rooms: data });
   } catch (error: any) {
@@ -45,15 +42,29 @@ export async function POST(req: Request) {
     );
 
     const { roomNumber, status } = await req.json();
+    const roomStr = String(roomNumber).trim();
     
-    // 🛠️ อัปเดตพร้อมดักจับ Error และใช้ String().trim() ป้องกันการเว้นวรรคเกิน
-    const { data, error } = await supabaseAdmin
+    // 🛠️ 1. ลองอัปเดตสถานะโดยใช้ชื่อคอลัมน์ room_num ก่อน
+    let { data, error } = await supabaseAdmin
         .from('rooms')
         .update({ status })
-        .eq('room_num', String(roomNumber).trim())
-        .select(); // ใส่ select() เพื่อขอดูผลลัพธ์ว่าบันทึกสำเร็จจริงๆ
+        .eq('room_num', roomStr)
+        .select();
 
-    // ถ้ามี Error จาก Supabase ให้โยนออกไปแจ้งเตือนทันที
+    // 🛡️ 2. ถ้าระบบฟ้องว่าหา room_num ไม่เจอ (Cache ค้าง) ให้สลับไปใช้ room_number อัตโนมัติทันที
+    if (error && error.message.includes('does not exist')) {
+        console.log('🔄 ระบบ Cache ค้าง: กำลังสลับไปใช้คอลัมน์ room_number อัตโนมัติ...');
+        const fallback = await supabaseAdmin
+            .from('rooms')
+            .update({ status })
+            .eq('room_number', roomStr)
+            .select();
+        
+        data = fallback.data;
+        error = fallback.error;
+    }
+
+    // ถ้ายัง Error อีก ให้โยนออกไปแจ้งเตือน
     if (error) {
         throw new Error(`อัปเดตไม่สำเร็จ: ${error.message}`);
     }
