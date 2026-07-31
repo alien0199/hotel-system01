@@ -103,23 +103,13 @@ export default function AdminPage() {
   const [isSavingHours, setIsSavingHours] = useState(false);
   const [nowTick, setNowTick] = useState<number>(Date.now());
 
-  // 📋 เก็บประวัติการเข้าพัก 30 วัน
+  // 📋 เก็บประวัติการเข้าพัก 30 วัน (ดึงมาจาก Supabase)
   const [historyLogs, setHistoryLogs] = useState<HistoryLog[]>([]);
 
   useEffect(() => {
     const auth = sessionStorage.getItem('admin_authenticated');
     if (auth === 'true') {
       setIsAuthenticated(true);
-    }
-    
-    // โหลดประวัติเก่าจาก localStorage
-    const savedLogs = localStorage.getItem('singburi_history_logs');
-    if (savedLogs) {
-      try {
-        setHistoryLogs(JSON.parse(savedLogs));
-      } catch (e) {
-        console.error('Load history error:', e);
-      }
     }
   }, []);
 
@@ -134,24 +124,42 @@ export default function AdminPage() {
     setPasswordInput('');
   };
 
-  const addHistoryLog = (roomName: string, roomPrice: number, checkInTime: string, checkOutTime: string) => {
-    const newLog: HistoryLog = {
-      room: roomName,
-      price: roomPrice,
-      checkIn: checkInTime,
-      checkOut: checkOutTime,
-    };
-    
-    setHistoryLogs((prev) => {
-      const updated = [newLog, ...prev];
-      localStorage.setItem('singburi_history_logs', JSON.stringify(updated));
-      return updated;
-    });
+  // 📝 ฟังก์ชันบันทึกประวัติลง Supabase อัตโนมัติ
+  const addHistoryLog = async (roomName: string, roomPrice: number, checkInTime: string, checkOutTime: string) => {
+    const newLog: HistoryLog = { room: roomName, price: roomPrice, checkIn: checkInTime, checkOut: checkOutTime };
+    setHistoryLogs((prev) => [newLog, ...prev]);
+
+    try {
+      await fetch('/api/history', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'add', room: roomName, price: roomPrice, checkIn: checkInTime, checkOut: checkOutTime })
+      });
+    } catch (e) {
+      console.error('Failed to save history to DB', e);
+    }
   };
 
   const fetchInitialData = async () => {
     try {
       const ts = Date.now();
+      
+      // โหลดประวัติเก่าจาก Supabase
+      try {
+        const historyRes = await fetch(`/api/history?t=${ts}`, { cache: 'no-store' });
+        const historyData = await historyRes.json();
+        if (historyData.success && Array.isArray(historyData.logs)) {
+          setHistoryLogs(historyData.logs.map((log: any) => ({
+            room: log.room_name,
+            price: log.price,
+            checkIn: log.check_in,
+            checkOut: log.check_out
+          })));
+        }
+      } catch (e) {
+        console.error('Fetch history error:', e);
+      }
+
       const roomsResponse = await fetch(`/api/get-rooms?t=${ts}`, { method: 'GET', cache: 'no-store' });
       if (!roomsResponse.ok) throw new Error(`โหลดข้อมูลห้องไม่สำเร็จ (${roomsResponse.status})`);
       
@@ -168,8 +176,6 @@ export default function AdminPage() {
             if (!databaseRoom) return room;
 
             const newStatus: RoomStatus = databaseRoom.status === 'occupied' ? 'ใช้งานอยู่' : 'ว่าง';
-            
-            // 🛡️ ดึงเวลาเข้าพักที่เซฟไว้ใน Cache กันหน้าเว็บรีเฟรช
             const savedCheckIn = localStorage.getItem(`checkIn_${room.name}`);
 
             return {
@@ -240,13 +246,10 @@ export default function AdminPage() {
           const now = new Date().toLocaleString('th-TH');
           let currentCheckIn = room.lastCheckIn;
 
-          // 🛡️ Logic ป้องกันข้อมูลหาย และบันทึกประวัติออโต้
           if (room.status === 'ว่าง' && newStatus === 'ใช้งานอยู่') {
-            // ลูกค้าสแกนโอนเงินเอง ระบบจับเวลาเข้าพักทันที
             localStorage.setItem(`checkIn_${room.name}`, now);
             currentCheckIn = now;
           } else if (room.status === 'ใช้งานอยู่' && newStatus === 'ว่าง') {
-            // ไฟตัด/หมดเวลา ทำการบันทึกลงตารางประวัติ 30 วัน
             const checkInTime = localStorage.getItem(`checkIn_${room.name}`) || room.lastCheckIn || '-';
             addHistoryLog(room.name, room.price, checkInTime, now);
             localStorage.removeItem(`checkIn_${room.name}`);
@@ -344,18 +347,15 @@ export default function AdminPage() {
     );
   };
 
-  // 📥 ฟังก์ชันดาวน์โหลดรายงานเป็นไฟล์ Excel (CSV) พร้อมรองรับภาษาไทย
   const handleExportCSV = () => {
     if (historyLogs.length === 0) {
       alert('ยังไม่มีประวัติการเข้าพักให้ส่งออก');
       return;
     }
-
     let csvContent = '\uFEFFห้อง,ราคา (บาท),เวลาเข้าพัก,เวลาออก\n';
     historyLogs.forEach((log) => {
       csvContent += `"${log.room}","${log.price}","${log.checkIn}","${log.checkOut}"\n`;
     });
-
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -366,17 +366,29 @@ export default function AdminPage() {
     document.body.removeChild(link);
   };
 
-  // 🔄 รีเซ็ตประวัติรอบ 30 วัน
-  const handleResetCycle = () => {
+  // 🔄 รีเซ็ตประวัติรอบ 30 วัน (ลบข้อมูลจาก Supabase โดยตรง)
+  const handleResetCycle = async () => {
     const confirmed = window.confirm(
-      '⚠️ ต้องการดาวน์โหลดเอกสาร และล้างข้อมูลเพื่อเริ่มรอบเดือนใหม่หรือไม่?'
+      '⚠️ ต้องการดาวน์โหลดเอกสาร และล้างข้อมูลเพื่อเริ่มรอบเดือนใหม่หรือไม่?\n(ข้อมูลในฐานข้อมูลจะถูกลบทิ้งถาวร)'
     );
     if (!confirmed) return;
 
     handleExportCSV();
-    setHistoryLogs([]);
-    localStorage.removeItem('singburi_history_logs');
-    setStatusMsg('🔄 รีเซ็ตรอบใหม่เรียบร้อยแล้ว (เริ่มเก็บประวัติใหม่ตั้งแต่ตอนนี้)');
+    
+    try {
+      setStatusMsg('⏳ กำลังล้างข้อมูลในระบบ...');
+      await fetch('/api/history', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'clear' })
+      });
+      
+      setHistoryLogs([]);
+      setStatusMsg('🔄 รีเซ็ตรอบใหม่ และล้างฐานข้อมูลเรียบร้อยแล้ว');
+    } catch (e) {
+      setStatusMsg('❌ เกิดข้อผิดพลาดในการล้างข้อมูล');
+    }
+    
     window.setTimeout(() => setStatusMsg(''), 4000);
   };
 
@@ -411,7 +423,6 @@ export default function AdminPage() {
         body: JSON.stringify({ roomNumber: room.name, status: databaseStatus }),
       });
 
-      // 🛡️ จัดการเวลาเข้า-ออกแบบ Manual (แอดมินกดเปิด/ปิดเอง)
       if (action === 'turn-on') {
         localStorage.setItem(`checkIn_${room.name}`, now);
       } else if (action === 'turn-off' && room.status === 'ใช้งานอยู่') {
@@ -486,7 +497,6 @@ export default function AdminPage() {
           </div>
         )}
 
-        {/* แผงควบคุมการตั้งค่าพร้อมเพย์และตั้งเวลาอัตโนมัติ */}
         <div className="bg-white p-6 rounded-2xl shadow-md border border-gray-200 mb-8 flex flex-col md:flex-row items-center justify-between">
           <div className="flex flex-col space-y-2">
             <span className="font-bold text-gray-700">📱 หมายเลขพร้อมเพย์รับเงิน:</span>
@@ -526,20 +536,19 @@ export default function AdminPage() {
                 onClick={handleExportCSV}
                 className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-bold text-sm shadow"
               >
-                📊 โหลดรายงาน Excel (ประวัติ)
+                📊 โหลดรายงาน Excel
               </button>
               <button
                 type="button"
                 onClick={handleResetCycle}
                 className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-bold text-sm shadow"
               >
-                🔄 จบรอบเดือน / เคลียร์ข้อมูลใหม่
+                🔄 จบรอบเดือน / เคลียร์ฐานข้อมูล
               </button>
             </div>
           </div>
         </div>
 
-        {/* รายการห้องพักทั้งหมด */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-12">
           {rooms.map((room) => (
             <div key={room.id} className="bg-white rounded-2xl shadow-md overflow-hidden border-2 border-gray-200">
@@ -619,7 +628,6 @@ export default function AdminPage() {
           ))}
         </div>
 
-        {/* ตารางประวัติการเข้าพักละเอียด (เก็บสะสมเพื่อออกรายงาน) */}
         <div className="bg-white rounded-2xl shadow-md p-6 border border-gray-200">
           <h2 className="text-xl font-black text-blue-900 mb-4">📋 ตารางประวัติการเข้าพัก (เก็บบันทึกรายละเอียด)</h2>
           {historyLogs.length === 0 ? (
