@@ -273,6 +273,7 @@ async function resolveDeviceId(
     auth: { persistSession: false }
   });
 
+  // 🛠️ ค้นหาแบบ Fallback กันเหนียว (หา room_num ก่อน ถ้าไม่มีค่อยหา room_number)
   let existingRoom = await supabaseAdmin
     .from('rooms')
     .select('tuya_device_id')
@@ -406,50 +407,30 @@ export async function POST(request: Request) {
     // 1. ส่งคำสั่งเปิด-ปิดไฟไปที่ Tuya
     const result = await sendDeviceCommand(clientId, clientSecret, accessToken, resolved.deviceId, commandCode, action);
 
-    // 2. 🛠️ ส่วนที่เสริมเข้ามาใหม่: จดเวลาหมดอายุลงฐานข้อมูล (ปรับใหม่ให้เจาะจงใช้ ID)
+    // 2. 🛠️ อัปเดตเวลาหมดอายุผ่าน RPC (ไม่พึ่ง schema cache ของ PostgREST เลย
+    //    ตัดปัญหา PGRST204 / "Could not find column in schema cache" ทิ้งถาวร)
     if (resolved.roomNumber) {
         try {
             const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
             const supabaseKey = (process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY)?.trim();
-            
+
             if (supabaseUrl && supabaseKey) {
                 const supabaseAdmin = createClient(supabaseUrl, supabaseKey, {
                     auth: { persistSession: false }
                 });
 
-                // คำนวณเวลาหมดอายุ
-                let expireTime = null;
-                if (action === 'on') {
-                    // 2 ชั่วโมงล่วงหน้า
-                    expireTime = new Date(Date.now() + (2 * 60 * 60 * 1000)).toISOString();
-                }
+                // คำนวณเวลา: เปิดไฟ = ปัจจุบัน + 2 ชั่วโมง, ปิดไฟ = เคลียร์ทิ้ง (null)
+                const expireTime = action === 'on'
+                    ? new Date(Date.now() + (2 * 60 * 60 * 1000)).toISOString()
+                    : null;
 
-                // 🛡️ ควานหา ID ของห้องให้เจอก่อน
-                let { data: roomData } = await supabaseAdmin
-                    .from('rooms')
-                    .select('id')
-                    .eq('room_num', resolved.roomNumber)
-                    .maybeSingle();
+                const { error: rpcErr } = await supabaseAdmin.rpc('set_room_expire', {
+                    p_room_num: resolved.roomNumber,
+                    p_expire_time: expireTime,
+                });
 
-                if (!roomData) {
-                    const fallback = await supabaseAdmin
-                        .from('rooms')
-                        .select('id')
-                        .eq('room_number', resolved.roomNumber)
-                        .maybeSingle();
-                    roomData = fallback.data;
-                }
-
-                // 🟢 ถ้าเจอ ID ค่อยเซฟเวลาเข้าไป (หมดปัญหา Cache ชื่อคอลัมน์ 100%)
-                if (roomData && roomData.id) {
-                    const { error: updateErr } = await supabaseAdmin
-                        .from('rooms')
-                        .update({ expire_tim: expireTime })
-                        .eq('id', roomData.id);
-
-                    if (updateErr) {
-                        console.error('Supabase Update Expire Time Error:', updateErr);
-                    }
+                if (rpcErr) {
+                    console.error('RPC set_room_expire Error:', rpcErr);
                 }
             }
         } catch (dbError) {
