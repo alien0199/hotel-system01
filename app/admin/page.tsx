@@ -13,6 +13,7 @@ interface RoomData {
   status: RoomStatus;
   lastCheckIn: string | null;
   lastCheckOut: string | null;
+  expireAt: string | null;
 }
 
 interface DatabaseRoom {
@@ -22,6 +23,7 @@ interface DatabaseRoom {
   status?: string;
   tuya_device_id?: string | null;
   price?: number | string | null;
+  expire_time?: string | null;
 }
 
 interface RoomsApiResponse {
@@ -41,6 +43,12 @@ interface SaveApiResponse {
   message?: string;
 }
 
+interface AutoOffSettingsApiResponse {
+  success?: boolean;
+  autoOffHours?: number;
+  message?: string;
+}
+
 const defaultRooms: RoomData[] = Array.from({ length: 8 }, (_, i) => ({
   id: `room_${i + 1}`,
   name: `10${i + 1}`,
@@ -50,12 +58,44 @@ const defaultRooms: RoomData[] = Array.from({ length: 8 }, (_, i) => ({
   status: 'ว่าง',
   lastCheckIn: null,
   lastCheckOut: null,
+  expireAt: null,
 }));
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error
     ? error.message
     : 'เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ';
+}
+
+// แปลงเวลาหมดอายุ (expire_time) เป็นข้อความนับถอยหลัง HH:MM:SS
+function formatCountdown(
+  expireAt: string | null,
+  nowTick: number
+): string {
+  if (!expireAt) {
+    return '-';
+  }
+
+  const target = new Date(expireAt).getTime();
+
+  if (Number.isNaN(target)) {
+    return '-';
+  }
+
+  const diffMs = target - nowTick;
+
+  if (diffMs <= 0) {
+    return 'กำลังจะปิดไฟ...';
+  }
+
+  const totalSeconds = Math.floor(diffMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  const pad = (value: number) => value.toString().padStart(2, '0');
+
+  return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
 }
 
 export default function AdminPage() {
@@ -67,6 +107,11 @@ export default function AdminPage() {
   const [statusMsg, setStatusMsg] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+
+  // ⏱️ ค่าตั้งเวลาปิดไฟอัตโนมัติ (ชั่วโมง) และตัวช่วยนับถอยหลังแบบเรียลไทม์
+  const [autoOffHours, setAutoOffHours] = useState<number>(2);
+  const [isSavingHours, setIsSavingHours] = useState(false);
+  const [nowTick, setNowTick] = useState<number>(Date.now());
 
   useEffect(() => {
     // ล้างข้อมูลเก่าที่เคยบันทึกไว้ในเบราว์เซอร์
@@ -92,7 +137,7 @@ export default function AdminPage() {
     setPasswordInput('');
   };
 
-  // โหลดข้อมูลห้องและพร้อมเพย์จากฐานข้อมูล
+  // โหลดข้อมูลห้อง, พร้อมเพย์ และค่าตั้งเวลาปิดไฟอัตโนมัติจากฐานข้อมูล
   const fetchInitialData = async () => {
     try {
       const ts = Date.now();
@@ -147,6 +192,10 @@ export default function AdminPage() {
                 databaseRoom.price !== null
                   ? Number(databaseRoom.price)
                   : room.price,
+              expireAt:
+                databaseRoom.expire_time !== undefined
+                  ? databaseRoom.expire_time
+                  : room.expireAt,
             };
           })
         );
@@ -175,13 +224,40 @@ export default function AdminPage() {
       ) {
         setPromptpay(promptPayData.promptpay);
       }
+
+      // โหลดค่าตั้งเวลาปิดไฟอัตโนมัติ (ไม่ทำให้ทั้งหน้าพังถ้าโหลดไม่สำเร็จ)
+      try {
+        const hoursResponse = await fetch(
+          `/api/auto-off-settings?t=${ts}`,
+          {
+            method: 'GET',
+            cache: 'no-store',
+          }
+        );
+
+        const hoursData =
+          (await hoursResponse.json()) as AutoOffSettingsApiResponse;
+
+        if (
+          hoursResponse.ok &&
+          hoursData.success !== false &&
+          typeof hoursData.autoOffHours === 'number'
+        ) {
+          setAutoOffHours(hoursData.autoOffHours);
+        }
+      } catch (hoursError) {
+        console.error(
+          'โหลดค่าตั้งเวลาปิดไฟอัตโนมัติไม่สำเร็จ:',
+          hoursError
+        );
+      }
     } catch (error) {
       console.error('Fetch initial data error:', error);
       setStatusMsg(`❌ ${getErrorMessage(error)}`);
     }
   };
 
-  // ดึงเฉพาะสถานะห้องทุก 5 วินาที
+  // ดึงเฉพาะสถานะห้อง (รวมเวลาหมดอายุ) ทุก 5 วินาที
   const fetchRoomStatusOnly = async () => {
     try {
       const ts = Date.now();
@@ -224,7 +300,15 @@ export default function AdminPage() {
               ? 'ใช้งานอยู่'
               : 'ว่าง';
 
-          if (room.status === newStatus) {
+          const newExpireAt =
+            databaseRoom.expire_time !== undefined
+              ? databaseRoom.expire_time
+              : room.expireAt;
+
+          if (
+            room.status === newStatus &&
+            room.expireAt === newExpireAt
+          ) {
             return room;
           }
 
@@ -233,16 +317,17 @@ export default function AdminPage() {
           return {
             ...room,
             status: newStatus,
+            expireAt: newExpireAt,
             lastCheckIn:
-              newStatus === 'ใช้งานอยู่'
+              newStatus === 'ใช้งานอยู่' && room.status !== newStatus
                 ? now
                 : room.lastCheckIn,
             lastCheckOut:
-              newStatus === 'ว่าง'
+              newStatus === 'ว่าง' && room.status !== newStatus
                 ? now
                 : room.lastCheckOut,
             usageCount:
-              newStatus === 'ใช้งานอยู่'
+              newStatus === 'ใช้งานอยู่' && room.status !== newStatus
                 ? room.usageCount + 1
                 : room.usageCount,
           };
@@ -265,6 +350,19 @@ export default function AdminPage() {
     }, 5000);
 
     return () => window.clearInterval(interval);
+  }, [isAuthenticated]);
+
+  // ⏱️ ตัวนับเวลาปัจจุบัน อัปเดตทุก 1 วินาที เพื่อให้ตัวนับถอยหลังวิ่งแบบเรียลไทม์
+  useEffect(() => {
+    if (!isAuthenticated) {
+      return;
+    }
+
+    const tickInterval = window.setInterval(() => {
+      setNowTick(Date.now());
+    }, 1000);
+
+    return () => window.clearInterval(tickInterval);
   }, [isAuthenticated]);
 
   const handleSaveData = async () => {
@@ -318,6 +416,56 @@ export default function AdminPage() {
     }
   };
 
+  // 💾 บันทึกค่าตั้งเวลาปิดไฟอัตโนมัติ (แยกจากปุ่มบันทึกข้อมูลห้องหลัก)
+  const handleSaveAutoOffHours = async () => {
+    if (isSavingHours) {
+      return;
+    }
+
+    if (!Number.isFinite(autoOffHours) || autoOffHours <= 0) {
+      setStatusMsg('❌ จำนวนชั่วโมงต้องมากกว่า 0');
+      window.setTimeout(() => setStatusMsg(''), 3000);
+      return;
+    }
+
+    setIsSavingHours(true);
+
+    try {
+      const response = await fetch('/api/auto-off-settings', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        cache: 'no-store',
+        body: JSON.stringify({ autoOffHours }),
+      });
+
+      const data =
+        (await response.json().catch(() => null)) as
+          | AutoOffSettingsApiResponse
+          | null;
+
+      if (!response.ok || !data?.success) {
+        throw new Error(
+          data?.message || 'บันทึกค่าตั้งเวลาไม่สำเร็จ'
+        );
+      }
+
+      setStatusMsg(
+        `✅ ตั้งเวลาปิดไฟอัตโนมัติที่ ${autoOffHours} ชั่วโมงเรียบร้อยแล้ว`
+      );
+    } catch (error) {
+      console.error('Save auto-off hours error:', error);
+      setStatusMsg(`❌ ${getErrorMessage(error)}`);
+    } finally {
+      setIsSavingHours(false);
+
+      window.setTimeout(() => {
+        setStatusMsg('');
+      }, 4000);
+    }
+  };
+
   const handleUpdateRoom = (
     id: string,
     field: keyof RoomData,
@@ -350,6 +498,7 @@ export default function AdminPage() {
       status: 'ว่าง' as RoomStatus,
       lastCheckIn: null,
       lastCheckOut: null,
+      expireAt: null,
     }));
 
     setRooms(resetRooms);
@@ -441,6 +590,9 @@ export default function AdminPage() {
         );
       }
 
+      // ดึงสถานะล่าสุด (รวม expire_time ที่ /api/sonoff เพิ่งบันทึกไป) กลับมาแสดงทันที
+      await fetchRoomStatusOnly();
+
       setRooms((previousRooms) =>
         previousRooms.map((item) => {
           if (item.id !== room.id) {
@@ -460,6 +612,7 @@ export default function AdminPage() {
             ...item,
             status: newStatus,
             lastCheckOut: now,
+            expireAt: null,
           };
         })
       );
@@ -606,6 +759,33 @@ export default function AdminPage() {
               className="p-2 border-2 border-blue-400 rounded mb-2 text-center font-bold text-gray-900 bg-white placeholder-gray-400 focus:outline-none focus:border-blue-600"
             />
 
+            {/* ⏱️ ช่องตั้งค่าจำนวนชั่วโมงก่อนปิดไฟอัตโนมัติ */}
+            <div className="flex items-center space-x-2 mb-2 bg-orange-50 border-2 border-orange-300 rounded-lg px-3 py-2">
+              <span className="font-bold text-orange-700 text-sm whitespace-nowrap">
+                ⏱️ ปิดไฟอัตโนมัติหลัง (ชม.):
+              </span>
+
+              <input
+                type="number"
+                min="0.5"
+                step="0.5"
+                value={autoOffHours}
+                onChange={(e) =>
+                  setAutoOffHours(Number(e.target.value))
+                }
+                className="w-16 p-1 border border-gray-300 rounded font-bold text-orange-700 text-center bg-white"
+              />
+
+              <button
+                type="button"
+                onClick={() => void handleSaveAutoOffHours()}
+                disabled={isSavingHours}
+                className="bg-orange-500 hover:bg-orange-600 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-3 py-1 rounded font-bold text-xs whitespace-nowrap"
+              >
+                {isSavingHours ? 'กำลังบันทึก...' : 'บันทึก'}
+              </button>
+            </div>
+
             <button
               type="button"
               onClick={handleResetDaily}
@@ -669,7 +849,7 @@ export default function AdminPage() {
 
               <div className="p-4">
                 <div
-                  className={`text-center py-2 mb-4 rounded-lg font-bold text-lg transition-colors duration-500 ${
+                  className={`text-center py-2 mb-2 rounded-lg font-bold text-lg transition-colors duration-500 ${
                     room.status === 'ว่าง'
                       ? 'bg-green-100 text-green-700'
                       : 'bg-red-100 text-red-700'
@@ -680,6 +860,14 @@ export default function AdminPage() {
                     ? '🟢 ว่างพร้อมให้บริการ'
                     : '🔴 มีลูกค้า (กำลังใช้งาน)'}
                 </div>
+
+                {/* ⏱️ ตัวนับถอยหลังก่อนปิดไฟอัตโนมัติ (แสดงเฉพาะห้องที่มีลูกค้าและมีเวลาหมดอายุ) */}
+                {room.status === 'ใช้งานอยู่' && room.expireAt && (
+                  <div className="text-center py-2 mb-4 rounded-lg font-bold text-base bg-orange-50 border border-orange-300 text-orange-700">
+                    ⏱️ ปิดไฟอัตโนมัติในอีก:{' '}
+                    {formatCountdown(room.expireAt, nowTick)}
+                  </div>
+                )}
 
                 <div className="mb-4 text-sm text-gray-600 flex justify-between">
                   <span>
