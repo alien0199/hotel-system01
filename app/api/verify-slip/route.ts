@@ -205,6 +205,37 @@ export async function POST(request: Request) {
       );
     }
 
+    // ==================================================================
+    // 🛑 ด่านที่ 1 (ใหม่): รปภ. ด่านสกัด - เช็คสถานะห้องก่อนเสียเครดิตตรวจสลิป
+    // ==================================================================
+    const { supabase, transRefColumn } = getSupabaseClient();
+    rollbackContext = { supabase, transRefColumn };
+
+    const { data: currentRoom, error: checkRoomError } = await supabase
+      .from('rooms')
+      .select('status')
+      .eq('room_number', roomNumber)
+      .maybeSingle();
+
+    if (checkRoomError) {
+      console.error('Check room status error:', checkRoomError);
+    }
+
+    // ถ้าพบว่าห้องนี้มีคนกำลังใช้งานอยู่ (occupied) ให้เตะออกทันที
+    if (currentRoom && currentRoom.status === 'occupied') {
+      return NextResponse.json(
+        {
+          success: false,
+          message: `❌ ห้อง ${roomNumber} มีผู้ใช้งานอยู่แล้ว! หากสแกนผิดห้อง กรุณาตรวจสอบ QR Code หน้าห้องของท่านอีกครั้ง`,
+        },
+        { status: 400 }
+      );
+    }
+    // ==================================================================
+
+    // ==================================================================
+    // 🔍 ด่านที่ 2: ส่งข้อมูลไปตรวจสลิปที่ Slip2Go
+    // ==================================================================
     const { secret, apiUrl } = getSlip2GoConfig();
 
     const slip2GoFormData = new FormData();
@@ -214,7 +245,6 @@ export async function POST(request: Request) {
       slipEntry.name || 'slip.jpg'
     );
 
-    // ส่งข้อมูลไปตรวจสลิปที่ Slip2Go
     const slip2GoResponse = await fetch(apiUrl, {
       method: 'POST',
       headers: {
@@ -267,14 +297,9 @@ export async function POST(request: Request) {
       );
     }
 
-    const { supabase, transRefColumn } =
-      getSupabaseClient();
-
-    rollbackContext = {
-      supabase,
-      transRefColumn,
-    };
-
+    // ==================================================================
+    // 💾 ด่านที่ 3: เช็คสลิปซ้ำ และบันทึกประวัติการใช้สลิป
+    // ==================================================================
     const {
       data: existingSlip,
       error: checkError,
@@ -328,7 +353,9 @@ export async function POST(request: Request) {
 
     reservedTransRef = transRef;
 
-    // ยิงคำสั่งเปิดไฟไปที่ API ของเราเอง (Tuya)
+    // ==================================================================
+    // 💡 ด่านที่ 4: สลิปถูกต้อง! ยิงคำสั่งเปิดไฟไปที่ API ของเรา (Tuya)
+    // ==================================================================
     const sonoffUrl = new URL(
       '/api/sonoff',
       request.url
@@ -343,7 +370,7 @@ export async function POST(request: Request) {
         },
         body: JSON.stringify({
           roomNumber,
-          action: 'on',
+          action: 'on', // อิงตามโค้ดเดิมของคุณที่ใช้คำว่า 'on'
         }),
         cache: 'no-store',
       }
@@ -378,7 +405,7 @@ export async function POST(request: Request) {
       );
     }
 
-    // 🛠️ สิ่งที่เพิ่มเข้ามา: สั่งอัปเดตสถานะห้องในฐานข้อมูล Supabase ให้เป็น 'occupied' (มีลูกค้าเข้าใช้งาน)
+    // 🛠️ อัปเดตสถานะห้องในฐานข้อมูล Supabase ให้เป็น 'occupied' (มีลูกค้าเข้าใช้งาน)
     const { error: updateRoomError } = await supabase
       .from('rooms')
       .update({ status: 'occupied' }) 
