@@ -273,7 +273,6 @@ async function resolveDeviceId(
     auth: { persistSession: false }
   });
 
-  // 🛠️ ค้นหาแบบ Fallback กันเหนียว (หา room_num ก่อน ถ้าไม่มีค่อยหา room_number)
   let existingRoom = await supabaseAdmin
     .from('rooms')
     .select('tuya_device_id')
@@ -407,36 +406,54 @@ export async function POST(request: Request) {
     // 1. ส่งคำสั่งเปิด-ปิดไฟไปที่ Tuya
     const result = await sendDeviceCommand(clientId, clientSecret, accessToken, resolved.deviceId, commandCode, action);
 
-    // 2. 🛠️ ส่วนที่เสริมเข้ามาใหม่: จดเวลาหมดอายุลงฐานข้อมูล Supabase
+    // 2. 🛠️ ส่วนที่เสริมเข้ามาใหม่: จดเวลาหมดอายุลงฐานข้อมูล (ปรับใหม่ให้เจาะจงใช้ ID)
     if (resolved.roomNumber) {
-        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
-        const supabaseKey = (process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY)?.trim();
-        
-        if (supabaseUrl && supabaseKey) {
-            const supabaseAdmin = createClient(supabaseUrl, supabaseKey, {
-                auth: { persistSession: false }
-            });
+        try {
+            const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+            const supabaseKey = (process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY)?.trim();
+            
+            if (supabaseUrl && supabaseKey) {
+                const supabaseAdmin = createClient(supabaseUrl, supabaseKey, {
+                    auth: { persistSession: false }
+                });
 
-            // คำนวณเวลา: ถ้าเปิดไฟ = เวลาปัจจุบันบวก 2 ชั่วโมง, ถ้าปิดไฟ = เคลียร์ค่าทิ้ง
-            let expireTime = null;
-            if (action === 'on') {
-                // 💡 ตรงนี้คือตัวคูณเวลา: 2 (ชั่วโมง) x 60 (นาที) x 60 (วินาที) x 1000 (มิลลิวินาที)
-                expireTime = new Date(Date.now() + (2 * 60 * 60 * 1000)).toISOString();
-            }
+                // คำนวณเวลาหมดอายุ
+                let expireTime = null;
+                if (action === 'on') {
+                    // 2 ชั่วโมงล่วงหน้า
+                    expireTime = new Date(Date.now() + (2 * 60 * 60 * 1000)).toISOString();
+                }
 
-            // นำเวลาที่คำนวณได้ไปอัปเดตลงตาราง rooms
-            const { error: updateErr } = await supabaseAdmin
-                .from('rooms')
-                .update({ expire_tim: expireTime })
-                .eq('room_num', resolved.roomNumber);
-
-            // ระบบสลับคอลัมน์อัตโนมัติ (เผื่อ Cache ค้าง)
-            if (updateErr && updateErr.message.includes('does not exist')) {
-                await supabaseAdmin
+                // 🛡️ ควานหา ID ของห้องให้เจอก่อน
+                let { data: roomData } = await supabaseAdmin
                     .from('rooms')
-                    .update({ expire_tim: expireTime })
-                    .eq('room_number', resolved.roomNumber);
+                    .select('id')
+                    .eq('room_num', resolved.roomNumber)
+                    .maybeSingle();
+
+                if (!roomData) {
+                    const fallback = await supabaseAdmin
+                        .from('rooms')
+                        .select('id')
+                        .eq('room_number', resolved.roomNumber)
+                        .maybeSingle();
+                    roomData = fallback.data;
+                }
+
+                // 🟢 ถ้าเจอ ID ค่อยเซฟเวลาเข้าไป (หมดปัญหา Cache ชื่อคอลัมน์ 100%)
+                if (roomData && roomData.id) {
+                    const { error: updateErr } = await supabaseAdmin
+                        .from('rooms')
+                        .update({ expire_tim: expireTime })
+                        .eq('id', roomData.id);
+
+                    if (updateErr) {
+                        console.error('Supabase Update Expire Time Error:', updateErr);
+                    }
+                }
             }
+        } catch (dbError) {
+            console.error('Database Operation Failed in Sonoff:', dbError);
         }
     }
 
