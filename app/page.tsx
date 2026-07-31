@@ -3,41 +3,50 @@
 import { useState, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 
-function SlipUploadContent() {
+function SlipUploadClient() {
   const searchParams = useSearchParams();
   const roomNumber = searchParams.get('room');
 
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [status, setStatus] = useState<{ type: 'idle' | 'loading' | 'success' | 'error', msg: string }>({ type: 'idle', msg: '' });
+  const [statusMsg, setStatusMsg] = useState<{ type: 'error' | 'success' | '', text: string }>({ type: '', text: '' });
+  const [isLoading, setIsLoading] = useState(false);
 
+  // ฟังก์ชันจัดการเมื่อลูกค้าเลือกรูปภาพ
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       const selectedFile = e.target.files[0];
-      setFile(selectedFile);
-      setPreviewUrl(URL.createObjectURL(selectedFile));
-      setStatus({ type: 'idle', msg: '' });
+      setFile(selectedFile); // เก็บไฟล์ลง State
+      setPreviewUrl(URL.createObjectURL(selectedFile)); // สร้าง URL สำหรับพรีวิว
+      setStatusMsg({ type: '', text: '' }); // ล้างข้อความแจ้งเตือนสีแดงทิ้ง
     }
   };
 
+  // ฟังก์ชันส่งสลิปไปตรวจสอบ
   const handleUpload = async () => {
+    // 1. ดักจับ Error ถ้ายังไม่เลือกไฟล์
     if (!file) {
-      setStatus({ type: 'error', msg: 'กรุณาเลือกไฟล์สลิปก่อนครับ' });
+      setStatusMsg({ type: 'error', text: '❌ กรุณาอัปโหลดรูปสลิป' });
       return;
     }
+    
+    // 2. ดักจับ Error ถ้าไม่มีเบอร์ห้องใน URL
     if (!roomNumber) {
-      setStatus({ type: 'error', msg: 'ไม่พบหมายเลขห้อง กรุณาสแกน QR Code ใหม่อีกครั้ง' });
+      setStatusMsg({ type: 'error', text: '❌ ไม่พบข้อมูลห้อง กรุณาสแกน QR ใหม่อีกครั้ง' });
       return;
     }
 
-    setStatus({ type: 'loading', msg: 'กำลังตรวจสอบสลิป กรุณารอสักครู่...' });
+    setIsLoading(true);
+    setStatusMsg({ type: '', text: '' });
 
     try {
+      // 3. แพ็คข้อมูลรูปภาพและเบอร์ห้อง
       const formData = new FormData();
-      formData.append('files', file);
+      formData.append('file', file);       // ส่งชื่อฟิลด์ 'file'
+      formData.append('files', file);      // สำรองชื่อ 'files' เผื่อ API ต้องการ
       formData.append('roomNumber', roomNumber);
 
-      // ส่งรูปไปให้ API ตรวจสอบ
+      // 4. ยิง API ไปตรวจสลิป
       const response = await fetch('/api/verify-slip', {
         method: 'POST',
         body: formData,
@@ -45,64 +54,85 @@ function SlipUploadContent() {
 
       const data = await response.json();
 
+      // 5. แจ้งผลการตรวจสอบ
       if (response.ok && data.success) {
-        setStatus({ type: 'success', msg: `✅ ตรวจสอบสำเร็จ! ระบบกำลังเปิดไฟห้อง ${roomNumber} ให้ท่านครับ` });
+        setStatusMsg({ type: 'success', text: `✅ ตรวจสอบสำเร็จ! ระบบเปิดไฟห้อง ${roomNumber} แล้ว` });
       } else {
-        setStatus({ type: 'error', msg: `❌ ${data.message || 'ตรวจสอบสลิปไม่ผ่าน'}` });
+        setStatusMsg({ type: 'error', text: `❌ ${data.message || 'สลิปไม่ถูกต้อง หรือตรวจสอบไม่ผ่าน'}` });
       }
-    } catch (error) {
-      setStatus({ type: 'error', msg: '❌ เกิดข้อผิดพลาดในการเชื่อมต่อระบบ' });
+    } catch (error: any) {
+      console.error("Upload error:", error);
+      setStatusMsg({ type: 'error', text: '❌ ระบบขัดข้อง ไม่สามารถส่งสลิปได้' });
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  // ดักจับกรณีลูกค้าเข้าเว็บโดยไม่ได้สแกน QR Code
+  // ถ้าลูกค้าเข้าเว็บมาโดยไม่มีเบอร์ห้อง (ไม่ได้สแกน QR)
   if (!roomNumber) {
     return (
-      <div className="text-center p-8 bg-white rounded-3xl shadow-xl mt-10 border-t-4 border-red-500">
-        <h2 className="text-2xl font-black text-red-600 mb-2">❌ ข้อมูลไม่ถูกต้อง</h2>
-        <p className="text-gray-600 font-medium">ไม่พบหมายเลขห้อง<br/>กรุณาสแกน QR Code จากหน้าจอเคาน์เตอร์ใหม่อีกครั้งครับ</p>
+      <div className="text-center mt-20 p-6 bg-white rounded-2xl shadow-lg border-t-4 border-red-500">
+        <h2 className="text-xl font-bold text-red-600 mb-2">ข้อมูลไม่ถูกต้อง</h2>
+        <p className="text-gray-600">กรุณาสแกน QR Code จากหน้าเคาน์เตอร์ใหม่อีกครั้ง</p>
       </div>
     );
   }
 
   return (
-    <div className="bg-white p-6 rounded-3xl shadow-xl max-w-sm w-full border-t-4 border-blue-600">
+    <div className="bg-white p-6 rounded-3xl shadow-xl w-full max-w-sm mx-auto">
       <div className="text-center mb-6">
-        <h1 className="text-2xl font-black text-blue-900 mb-1">🏨 สิงห์บุรีแกรนด์บางระจัน</h1>
-        <p className="text-gray-500 font-medium">ส่งสลิปเพื่อเปิดใช้งานห้อง <span className="text-blue-600 font-black text-xl">{roomNumber}</span></p>
+        <h1 className="text-2xl font-black text-blue-900 mb-2">🏨 สิงห์บุรีแกรนด์บางระจัน</h1>
+        <p className="text-gray-600 font-medium text-lg">
+          ส่งสลิปเพื่อเปิดใช้งานห้อง <span className="text-blue-600 font-black">{roomNumber}</span>
+        </p>
       </div>
 
-      <div className="mb-6">
-        <label className="block w-full cursor-pointer bg-blue-50 hover:bg-blue-100 border-2 border-dashed border-blue-400 rounded-2xl p-6 text-center transition-colors">
+      <label className="block w-full cursor-pointer mb-6 relative">
+        <div className={`border-2 border-dashed rounded-2xl p-2 transition-colors ${
+          previewUrl ? 'border-blue-400 bg-blue-50' : 'border-blue-300 hover:border-blue-500 bg-gray-50'
+        }`}>
           {previewUrl ? (
-            <img src={previewUrl} alt="Slip Preview" className="max-h-64 mx-auto rounded-lg shadow-sm" />
+            // แสดงรูปพรีวิว
+            <img src={previewUrl} alt="Slip Preview" className="max-h-[400px] w-full mx-auto rounded-xl shadow-sm object-contain" />
           ) : (
-            <div className="flex flex-col items-center justify-center py-4">
-              <span className="text-5xl mb-3">📸</span>
-              <span className="text-blue-800 font-bold text-lg">กดตรงนี้เพื่อเลือกรูปสลิป</span>
-              <span className="text-sm text-blue-500 mt-1">รองรับสลิปธนาคารทุกแอป</span>
+            // แสดงไอคอนให้กดอัปโหลด
+            <div className="flex flex-col items-center justify-center py-16">
+              <span className="text-5xl mb-4">📸</span>
+              <span className="text-blue-800 font-bold text-lg">กดเพื่ออัปโหลดรูปสลิป</span>
             </div>
           )}
-          <input type="file" accept="image/*" onChange={handleFileChange} className="hidden" />
-        </label>
-      </div>
+        </div>
+        <input type="file" accept="image/*" onChange={handleFileChange} className="hidden" />
+      </label>
 
-      {status.msg && (
-        <div className={`p-4 rounded-xl mb-6 text-center font-bold text-sm shadow-sm ${
-          status.type === 'error' ? 'bg-red-100 text-red-700 border border-red-200' :
-          status.type === 'success' ? 'bg-green-100 text-green-700 border border-green-200' :
-          'bg-yellow-100 text-yellow-700 border border-yellow-200'
+      {/* กล่องแสดงข้อความ Error / Success */}
+      {statusMsg.text && (
+        <div className={`p-4 rounded-xl mb-4 text-center font-bold text-sm shadow-sm ${
+          statusMsg.type === 'error' ? 'bg-red-100 text-red-700 border border-red-200' : 'bg-green-100 text-green-700 border border-green-200'
         }`}>
-          {status.msg}
+          {statusMsg.text}
         </div>
       )}
 
+      {/* ปุ่มยืนยัน */}
       <button
         onClick={handleUpload}
-        disabled={status.type === 'loading' || !file}
-        className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white py-4 rounded-xl font-bold text-xl shadow-lg transition transform active:scale-95 flex items-center justify-center"
+        disabled={isLoading || !file}
+        className={`w-full py-4 rounded-2xl font-bold text-xl shadow-lg transition transform active:scale-95 text-white flex justify-center items-center ${
+          isLoading || !file ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'
+        }`}
       >
-        {status.type === 'loading' ? '⏳ กำลังตรวจสอบสลิป...' : '📤 ยืนยันการส่งสลิป'}
+        {isLoading ? (
+          <>
+            <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            กำลังตรวจสอบ...
+          </>
+        ) : (
+          '📤 ยืนยันการส่งสลิป'
+        )}
       </button>
     </div>
   );
@@ -110,9 +140,9 @@ function SlipUploadContent() {
 
 export default function CustomerPage() {
   return (
-    <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4 font-sans">
-      <Suspense fallback={<div className="font-bold text-blue-600 text-xl animate-pulse">กำลังโหลดข้อมูล...</div>}>
-        <SlipUploadContent />
+    <div className="min-h-screen bg-gray-100 flex flex-col items-center pt-8 px-4 font-sans">
+      <Suspense fallback={<div className="font-bold text-blue-600 text-xl animate-pulse mt-20">กำลังโหลดข้อมูล...</div>}>
+        <SlipUploadClient />
       </Suspense>
     </div>
   );
