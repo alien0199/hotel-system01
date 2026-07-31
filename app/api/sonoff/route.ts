@@ -349,6 +349,36 @@ async function sendDeviceCommand(
   });
 }
 
+/**
+ * ดึงค่า "จำนวนชั่วโมงก่อนปิดไฟอัตโนมัติ" จากตาราง app_settings
+ * ถ้าหาไม่เจอหรือเกิดข้อผิดพลาดใดๆ จะใช้ค่า default 2 ชั่วโมงเสมอ
+ * (กันไม่ให้ระบบเปิดไฟล้มเหลวทั้งหมดเพียงเพราะอ่านค่าตั้งเวลาไม่ได้)
+ */
+async function getAutoOffHours(
+  supabaseAdmin: ReturnType<typeof createClient>
+): Promise<number> {
+  const DEFAULT_HOURS = 2;
+
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('app_settings')
+      .select('auto_off_hours')
+      .eq('id', 1)
+      .maybeSingle();
+
+    if (error) {
+      console.error('อ่านค่า auto_off_hours ไม่สำเร็จ ใช้ค่า default:', error);
+      return DEFAULT_HOURS;
+    }
+
+    const hours = Number((data as any)?.auto_off_hours);
+    return Number.isFinite(hours) && hours > 0 ? hours : DEFAULT_HOURS;
+  } catch (error) {
+    console.error('อ่านค่า auto_off_hours ล้มเหลว ใช้ค่า default:', error);
+    return DEFAULT_HOURS;
+  }
+}
+
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
@@ -407,8 +437,8 @@ export async function POST(request: Request) {
     // 1. ส่งคำสั่งเปิด-ปิดไฟไปที่ Tuya
     const result = await sendDeviceCommand(clientId, clientSecret, accessToken, resolved.deviceId, commandCode, action);
 
-    // 2. 🛠️ อัปเดตเวลาหมดอายุผ่าน RPC (ไม่พึ่ง schema cache ของ PostgREST เลย
-    //    ตัดปัญหา PGRST204 / "Could not find column in schema cache" ทิ้งถาวร)
+    // 2. 🛠️ อัปเดตเวลาหมดอายุผ่าน RPC โดยดึงจำนวนชั่วโมงจากตาราง app_settings แบบไดนามิก
+    //    (ไม่ hardcode 2 ชั่วโมงอีกต่อไป ปรับได้จากหน้า Admin)
     if (resolved.roomNumber) {
         try {
             const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
@@ -419,10 +449,12 @@ export async function POST(request: Request) {
                     auth: { persistSession: false }
                 });
 
-                // คำนวณเวลา: เปิดไฟ = ปัจจุบัน + 2 ชั่วโมง, ปิดไฟ = เคลียร์ทิ้ง (null)
-                const expireTime = action === 'on'
-                    ? new Date(Date.now() + (2 * 60 * 60 * 1000)).toISOString()
-                    : null;
+                let expireTime: string | null = null;
+
+                if (action === 'on') {
+                    const hours = await getAutoOffHours(supabaseAdmin);
+                    expireTime = new Date(Date.now() + (hours * 60 * 60 * 1000)).toISOString();
+                }
 
                 const { error: rpcErr } = await supabaseAdmin.rpc('set_room_expire', {
                     p_room_num: resolved.roomNumber,
