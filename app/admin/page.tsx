@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 
 type RoomStatus = 'ว่าง' | 'ใช้งานอยู่';
 
@@ -14,6 +14,7 @@ interface RoomData {
   lastCheckIn: string | null;
   lastCheckOut: string | null;
   expireAt: string | null;
+  isOnline?: boolean | null; // 🛠️ เพิ่ม state สำหรับเก็บสถานะ Wi-Fi ของเบรกเกอร์
 }
 
 interface DatabaseRoom {
@@ -66,6 +67,7 @@ const defaultRooms: RoomData[] = Array.from({ length: 8 }, (_, i) => ({
   lastCheckIn: null,
   lastCheckOut: null,
   expireAt: null,
+  isOnline: null,
 }));
 
 function getErrorMessage(error: unknown): string {
@@ -103,8 +105,13 @@ export default function AdminPage() {
   const [isSavingHours, setIsSavingHours] = useState(false);
   const [nowTick, setNowTick] = useState<number>(Date.now());
 
-  // 📋 เก็บประวัติการเข้าพัก 30 วัน (ดึงมาจาก Supabase)
   const [historyLogs, setHistoryLogs] = useState<HistoryLog[]>([]);
+
+  // 🛠️ ใช้ useRef เก็บค่า rooms ล่าสุด เพื่อให้ setInterval ทำงานร่วมกับ State ได้แม่นยำ
+  const roomsRef = useRef<RoomData[]>(rooms);
+  useEffect(() => {
+    roomsRef.current = rooms;
+  }, [rooms]);
 
   useEffect(() => {
     const auth = sessionStorage.getItem('admin_authenticated');
@@ -124,7 +131,6 @@ export default function AdminPage() {
     setPasswordInput('');
   };
 
-  // 📝 ฟังก์ชันบันทึกประวัติลง Supabase อัตโนมัติ
   const addHistoryLog = async (roomName: string, roomPrice: number, checkInTime: string, checkOutTime: string) => {
     const newLog: HistoryLog = { room: roomName, price: roomPrice, checkIn: checkInTime, checkOut: checkOutTime };
     setHistoryLogs((prev) => [newLog, ...prev]);
@@ -144,7 +150,6 @@ export default function AdminPage() {
     try {
       const ts = Date.now();
       
-      // โหลดประวัติเก่าจาก Supabase
       try {
         const historyRes = await fetch(`/api/history?t=${ts}`, { cache: 'no-store' });
         const historyData = await historyRes.json();
@@ -272,6 +277,42 @@ export default function AdminPage() {
     }
   };
 
+  // 🛠️ ฟังก์ชันเช็คสถานะ Wi-Fi เบื้องหลัง
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    
+    const checkWifiStatus = async () => {
+      const currentRooms = [...roomsRef.current];
+      let hasChanges = false;
+
+      for (let i = 0; i < currentRooms.length; i++) {
+        const room = currentRooms[i];
+        if (room.deviceId && room.deviceId.trim() !== '') {
+          try {
+            const res = await fetch(`/api/tuya-status?deviceId=${room.deviceId.trim()}`);
+            if (res.ok) {
+              const data = await res.json();
+              if (data.success && room.isOnline !== data.isOnline) {
+                currentRooms[i] = { ...room, isOnline: data.isOnline };
+                hasChanges = true;
+              }
+            }
+          } catch (e) {
+            // ซ่อน error ไว้หลังบ้านไม่ให้กวนหน้าแอดมิน
+          }
+        }
+      }
+      
+      if (hasChanges) {
+        setRooms(currentRooms);
+      }
+    };
+
+    checkWifiStatus(); // เช็คทันทีตอนเปิดหน้า
+    const wifiInterval = window.setInterval(checkWifiStatus, 15000); // ตั้งเวลาเช็คใหม่ทุก 15 วินาที
+    return () => window.clearInterval(wifiInterval);
+  }, [isAuthenticated]);
+
   useEffect(() => {
     if (!isAuthenticated) return;
     void fetchInitialData();
@@ -366,7 +407,6 @@ export default function AdminPage() {
     document.body.removeChild(link);
   };
 
-  // 🔄 รีเซ็ตประวัติรอบ 30 วัน (ลบข้อมูลจาก Supabase โดยตรง)
   const handleResetCycle = async () => {
     const confirmed = window.confirm(
       '⚠️ ต้องการดาวน์โหลดเอกสาร และล้างข้อมูลเพื่อเริ่มรอบเดือนใหม่หรือไม่?\n(ข้อมูลในฐานข้อมูลจะถูกลบทิ้งถาวร)'
@@ -582,13 +622,26 @@ export default function AdminPage() {
                   สถานะ: {room.status === 'ว่าง' ? '🟢 ว่างพร้อมให้บริการ' : '🔴 มีลูกค้า (กำลังใช้งาน)'}
                 </div>
 
+                {/* 🛠️ บล็อกแสดงสถานะ Wi-Fi เบรกเกอร์ */}
+                <div className={`text-center py-1 mb-2 rounded-lg font-semibold text-sm transition-colors duration-500 ${
+                  room.isOnline === true ? 'bg-blue-50 text-blue-600 border border-blue-200' : 
+                  room.isOnline === false ? 'bg-red-50 text-red-600 border border-red-200' : 
+                  'bg-gray-50 text-gray-500 border border-gray-200'
+                }`}>
+                  📡 สัญญาณ Wi-Fi: {
+                    room.isOnline === true ? '🟢 ออนไลน์ (ปกติ)' : 
+                    room.isOnline === false ? '🔴 ออฟไลน์ (ไม่มีไฟ/เน็ตหลุด)' : 
+                    '⚪ กำลังตรวจสอบ...'
+                  }
+                </div>
+
                 {room.status === 'ใช้งานอยู่' && room.expireAt && (
                   <div className="text-center py-2 mb-4 rounded-lg font-bold text-base bg-orange-50 border border-orange-300 text-orange-700">
                     ⏱️ ปิดไฟอัตโนมัติในอีก: {formatCountdown(room.expireAt, nowTick)}
                   </div>
                 )}
 
-                <div className="mb-4 text-sm text-gray-600 flex justify-between">
+                <div className="mb-4 text-sm text-gray-600 flex justify-between mt-2">
                   <span>เข้า: {room.lastCheckIn || '-'}</span>
                   <span>ออก: {room.lastCheckOut || '-'}</span>
                 </div>
