@@ -277,19 +277,23 @@ export default function AdminPage() {
     }
   };
 
-  // 🛠️ ฟังก์ชันเช็คสถานะ Wi-Fi เบื้องหลัง
+// 🛠️ ฟังก์ชันเช็คสถานะ Wi-Fi เบื้องหลัง (แก้ไขเรื่อง Cache ให้ไม่อัปเดตค้าง)
   useEffect(() => {
     if (!isAuthenticated) return;
     
     const checkWifiStatus = async () => {
       const currentRooms = [...roomsRef.current];
       let hasChanges = false;
+      const ts = Date.now(); // 💡 เพิ่มเวลาปัจจุบันเข้าไปเพื่อทำลาย Cache
 
       for (let i = 0; i < currentRooms.length; i++) {
         const room = currentRooms[i];
         if (room.deviceId && room.deviceId.trim() !== '') {
           try {
-            const res = await fetch(`/api/tuya-status?deviceId=${room.deviceId.trim()}`);
+            // 💡 เพิ่ม &t=${ts} และ cache: 'no-store' เพื่อบังคับให้ดึงข้อมูลใหม่เสมอ
+            const res = await fetch(`/api/tuya-status?deviceId=${room.deviceId.trim()}&t=${ts}`, {
+              cache: 'no-store'
+            });
             if (res.ok) {
               const data = await res.json();
               if (data.success && room.isOnline !== data.isOnline) {
