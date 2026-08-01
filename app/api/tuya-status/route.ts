@@ -3,14 +3,13 @@ import { createHash, createHmac } from 'node:crypto';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-export const revalidate = 0; // บังคับไม่ให้ Vercel จำค่าแคช
+export const revalidate = 0;
 
 const TUYA_BASE_URL = (
   process.env.TUYA_BASE_URL?.trim() ||
   'https://openapi-sg.iotbing.com'
 ).replace(/\/+$/, '');
 
-// 💡 ตัวแปรสำหรับจำ Token ไว้ในหน่วยความจำ (ไม่ให้ขอใหม่ทุก 15 วินาทีจนโดนบล็อก)
 let cachedAccessToken = '';
 let tokenExpireTime = 0;
 
@@ -79,21 +78,19 @@ async function tuyaRequest({
   }
 
   if (!response.ok || !data?.success) {
+    console.error('Tuya API Request Failed:', data);
     throw new Error(data?.msg || 'Tuya API Request Failed');
   }
 
   return data;
 }
 
-// 💡 ฟังก์ชันดึง Token แบบฉลาด (ถ้ายังไม่หมดอายุ จะใช้ของเดิม)
 async function getValidToken(clientId: string, clientSecret: string) {
   const now = Date.now();
-  // ถ้ามี Token เดิมและยังไม่หมดอายุ (เผื่อเวลาไว้ 5 นาที) ให้ใช้ของเดิม
   if (cachedAccessToken && tokenExpireTime > now + 300000) {
     return cachedAccessToken;
   }
 
-  // ถ้าหมดอายุ ค่อยส่งไปขอใหม่
   const tokenData = await tuyaRequest({
     method: 'GET',
     path: '/v1.0/token?grant_type=1',
@@ -106,7 +103,6 @@ async function getValidToken(clientId: string, clientSecret: string) {
   }
 
   cachedAccessToken = tokenData.result.access_token;
-  // Tuya ให้เวลา Token มา (ปกติคือ 7200 วินาที หรือ 2 ชั่วโมง)
   const expireInSeconds = tokenData.result.expire_time || 7200;
   tokenExpireTime = now + (expireInSeconds * 1000);
 
@@ -123,22 +119,23 @@ export async function GET(request: Request) {
     }
 
     const { clientId, clientSecret } = getTuyaCredentials();
-
-    // 1. ดึง Token แบบฉลาด (ดึงจากความจำ Cache ก่อน)
     const accessToken = await getValidToken(clientId, clientSecret);
 
-    // 2. ถามสถานะอุปกรณ์ล่าสุด
+    // 💡 ใช้ Path ให้ตรงกับระบบ IoT Core
     const deviceData = await tuyaRequest({
       method: 'GET',
-      path: `/v1.0/devices/${deviceId}`,
+      path: `/v1.0/iot-03/devices/${deviceId}`,
       clientId,
       clientSecret,
       accessToken,
     });
 
+    // ดึงสถานะการเชื่อมต่อ (รองรับทั้งฟอร์แมต is_online และ online)
+    const isOnline = deviceData.result?.is_online === true || deviceData.result?.online === true;
+
     return NextResponse.json({
       success: true,
-      isOnline: deviceData.result?.is_online || false,
+      isOnline: isOnline,
       timestamp: Date.now()
     });
 
