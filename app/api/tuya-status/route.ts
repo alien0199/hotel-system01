@@ -1,41 +1,98 @@
 import { NextResponse } from 'next/server';
-import crypto from 'crypto';
+import { createHash, createHmac } from 'node:crypto';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-// ดึงค่า Credentials ของ Tuya จาก Environment Variables
-const clientId = process.env.TUYA_CLIENT_ID?.trim() || '';
-const secret = process.env.TUYA_CLIENT_SECRET?.trim() || process.env.TUYA_SECRET?.trim() || '';
-const baseUrl = process.env.TUYA_ENDPOINT?.trim() || 'https://openapi.tuyaap.com';
+// 💡 ดึง Base URL แบบเดียวกับที่ระบบ Sonoff ของคุณใช้
+const TUYA_BASE_URL = (
+  process.env.TUYA_BASE_URL?.trim() ||
+  'https://openapi-sg.iotbing.com'
+).replace(/\/+$/, '');
 
-// ฟังก์ชันขอ Access Token จาก Tuya
-async function getTuyaToken() {
-  const timestamp = Date.now().toString();
-  const method = 'GET';
-  const path = '/v1.0/token?grant_type=1';
-  
-  const contentHash = crypto.createHash('sha256').update('').digest('hex');
-  const stringToSign = [method, contentHash, '', path].join('\n');
-  const signStr = clientId + timestamp + stringToSign;
-  const sign = crypto.createHmac('sha256', secret).update(signStr).digest('hex').toUpperCase();
-
-  const res = await fetch(`${baseUrl}${path}`, {
-    method: 'GET',
-    headers: {
-      client_id: clientId,
-      sign: sign,
-      t: timestamp,
-      sign_method: 'HMAC-SHA256',
-    },
-    cache: 'no-store'
-  });
-  
-  const data = await res.json();
-  if (!data.success) throw new Error(data.msg || 'Failed to get Tuya token');
-  return data.result.access_token;
+// ==========================================
+// ฟังก์ชันเข้ารหัสมาตรฐานของ Tuya
+// ==========================================
+function sha256(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
+function hmacSha256(value: string, secret: string): string {
+  return createHmac('sha256', secret).update(value, 'utf8').digest('hex').toUpperCase();
+}
+
+function createStringToSign(method: string, path: string, body: string = ''): string {
+  return [method.toUpperCase(), sha256(body), '', path].join('\n');
+}
+
+function getTuyaCredentials() {
+  const clientId = process.env.TUYA_ACCESS_ID?.trim();
+  const clientSecret = process.env.TUYA_ACCESS_SECRET?.trim();
+
+  if (!clientId || !clientSecret) {
+    throw new Error('ไม่พบ TUYA_ACCESS_ID หรือ TUYA_ACCESS_SECRET ใน Vercel');
+  }
+
+  return { clientId, clientSecret };
+}
+
+// ==========================================
+// ฟังก์ชันกลางสำหรับยิง Request ไปหา Tuya
+// ==========================================
+async function tuyaRequest({
+  method,
+  path,
+  clientId,
+  clientSecret,
+  accessToken,
+}: {
+  method: 'GET';
+  path: string;
+  clientId: string;
+  clientSecret: string;
+  accessToken?: string;
+}) {
+  const timestamp = Date.now().toString();
+  const stringToSign = createStringToSign(method, path, '');
+  
+  const signPayload = clientId + (accessToken || '') + timestamp + stringToSign;
+
+  const headers: Record<string, string> = {
+    client_id: clientId,
+    sign: hmacSha256(signPayload, clientSecret),
+    sign_method: 'HMAC-SHA256',
+    t: timestamp,
+    lang: 'en',
+  };
+
+  if (accessToken) {
+    headers.access_token = accessToken;
+  }
+
+  const response = await fetch(`${TUYA_BASE_URL}${path}`, {
+    method,
+    headers,
+    cache: 'no-store',
+  });
+
+  const text = await response.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error('Tuya API error: Response is not JSON');
+  }
+
+  if (!response.ok || !data?.success) {
+    throw new Error(data?.msg || 'Tuya API Request Failed');
+  }
+
+  return data;
+}
+
+// ==========================================
+// API หลัก: ตรวจสอบสถานะ Online / Offline
+// ==========================================
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -45,42 +102,36 @@ export async function GET(request: Request) {
       return NextResponse.json({ success: false, message: 'Missing deviceId' }, { status: 400 });
     }
 
-    // 1. ขอ Token
-    const token = await getTuyaToken();
-    const timestamp = Date.now().toString();
-    
-    // 2. ยิงไปเช็คสถานะอุปกรณ์ (Device Status)
-    const method = 'GET';
-    const path = `/v1.0/devices/${deviceId}`;
+    const { clientId, clientSecret } = getTuyaCredentials();
 
-    const contentHash = crypto.createHash('sha256').update('').digest('hex');
-    const stringToSign = [method, contentHash, '', path].join('\n');
-    const signStr = clientId + token + timestamp + stringToSign;
-    const sign = crypto.createHmac('sha256', secret).update(signStr).digest('hex').toUpperCase();
-
-    const res = await fetch(`${baseUrl}${path}`, {
+    // 1. ขอ Token แบบใหม่
+    const tokenData = await tuyaRequest({
       method: 'GET',
-      headers: {
-        client_id: clientId,
-        access_token: token,
-        sign: sign,
-        t: timestamp,
-        sign_method: 'HMAC-SHA256',
-      },
-      cache: 'no-store'
+      path: '/v1.0/token?grant_type=1',
+      clientId,
+      clientSecret,
     });
 
-    const data = await res.json();
-    
-    if (data.success && data.result) {
-      return NextResponse.json({
-        success: true,
-        isOnline: data.result.is_online // ส่งสถานะ true (ออนไลน์) หรือ false (ออฟไลน์) กลับไป
-      });
-    }
+    const accessToken = tokenData.result?.access_token;
+    if (!accessToken) throw new Error('ไม่สามารถดึง Access Token จาก Tuya ได้');
 
-    return NextResponse.json({ success: false, message: data.msg || 'Device not found' });
+    // 2. ดึงข้อมูลสถานะอุปกรณ์ (เพื่อดูค่า is_online)
+    const deviceData = await tuyaRequest({
+      method: 'GET',
+      path: `/v1.0/devices/${deviceId}`,
+      clientId,
+      clientSecret,
+      accessToken,
+    });
+
+    // ส่งสถานะกลับไปให้หน้าแอดมินแสดงผล
+    return NextResponse.json({
+      success: true,
+      isOnline: deviceData.result?.is_online || false
+    });
+
   } catch (error: any) {
+    console.error('Tuya Status Check Error:', error);
     return NextResponse.json({ success: false, message: error.message }, { status: 500 });
   }
 }
