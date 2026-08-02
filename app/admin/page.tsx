@@ -329,8 +329,20 @@ export default function AdminPage() {
     };
 
     checkWifiStatus();
-    const wifiInterval = window.setInterval(checkWifiStatus, 60000); 
-    return () => window.clearInterval(wifiInterval);
+    const wifiInterval = window.setInterval(checkWifiStatus, 60000); // เช็คทุก 1 นาที (คงไว้ เพราะ Tuya มีโควต้าจำกัด)
+
+    // 💡 พอเปิดจอ/สลับกลับมาแท็บนี้ ให้เช็ค Wi-Fi ทันทีเช่นกัน
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        void checkWifiStatus();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.clearInterval(wifiInterval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, [isAuthenticated]);
 
   useEffect(() => {
@@ -338,8 +350,20 @@ export default function AdminPage() {
     void fetchInitialData();
     const interval = window.setInterval(() => {
       void fetchRoomStatusOnly();
-    }, 15000);
-    return () => window.clearInterval(interval);
+    }, 5000); // 💡 กลับไปใช้ 5 วิเหมือนเดิม เพราะตอนนี้หยุดยิงอัตโนมัติเมื่อพับจอแล้ว (Supabase รับโหลดนี้ไหว)
+
+    // 💡 พอเปิดจอ/สลับกลับมาแท็บนี้ ให้เช็คสถานะทันที ไม่ต้องรอรอบถัดไป
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        void fetchRoomStatusOnly();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, [isAuthenticated]);
 
   useEffect(() => {
