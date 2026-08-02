@@ -14,7 +14,7 @@ interface RoomData {
   lastCheckIn: string | null;
   lastCheckOut: string | null;
   expireAt: string | null;
-  isOnline?: boolean | null; // 🛠️ เพิ่ม state สำหรับเก็บสถานะ Wi-Fi ของเบรกเกอร์
+  isOnline?: boolean | null;
 }
 
 interface DatabaseRoom {
@@ -57,9 +57,10 @@ interface HistoryLog {
   checkOut: string;
 }
 
+// 🛠️ ล็อกค่าเริ่มต้นเป็น 11-18 ตายตัวแบบไม่สนใจฐานข้อมูล
 const defaultRooms: RoomData[] = Array.from({ length: 8 }, (_, i) => ({
-  id: `room_${i + 1}`,
-  name: `10${i + 1}`,
+  id: `temp_id_${11 + i}`, 
+  name: `${11 + i}`, 
   deviceId: '',
   price: 350,
   usageCount: 0,
@@ -107,7 +108,6 @@ export default function AdminPage() {
 
   const [historyLogs, setHistoryLogs] = useState<HistoryLog[]>([]);
 
-  // 🛠️ ใช้ useRef เก็บค่า rooms ล่าสุด เพื่อให้ setInterval ทำงานร่วมกับ State ได้แม่นยำ
   const roomsRef = useRef<RoomData[]>(rooms);
   useEffect(() => {
     roomsRef.current = rooms;
@@ -173,11 +173,12 @@ export default function AdminPage() {
       if (roomsData.success && Array.isArray(roomsData.rooms)) {
         setRooms((previousRooms) =>
           previousRooms.map((room) => {
-            const databaseRoom = roomsData.rooms?.find((item) => {
-              const databaseRoomNumber = item.room_num ?? item.room_number;
-              return String(databaseRoomNumber ?? '').trim() === String(room.name).trim();
-            });
+            // 💡 ค้นหาข้อมูลแบบเจาะจงเฉพาะชื่อห้องที่ตรงกับหน้าเว็บ (11-18) เท่านั้น
+            const databaseRoom = roomsData.rooms?.find(
+              (item) => String(item.room_num ?? item.room_number).trim() === room.name
+            );
 
+            // ถ้าหาไม่เจอในฐานข้อมูล (เช่นเพิ่งเคยสร้าง) ให้แสดงกล่องห้อง 11-18 เปล่าๆ รอเซฟ
             if (!databaseRoom) return room;
 
             const newStatus: RoomStatus = databaseRoom.status === 'occupied' ? 'ใช้งานอยู่' : 'ว่าง';
@@ -185,14 +186,14 @@ export default function AdminPage() {
 
             return {
               ...room,
-              id: databaseRoom.id || room.id,
-              status: newStatus,
+              id: databaseRoom.id || room.id, // ได้ ID ที่ถูกต้อง 100% จากฐานข้อมูล
               deviceId: databaseRoom.tuya_device_id !== undefined && databaseRoom.tuya_device_id !== null
                   ? String(databaseRoom.tuya_device_id)
                   : room.deviceId,
               price: databaseRoom.price !== undefined && databaseRoom.price !== null
                   ? Number(databaseRoom.price)
                   : room.price,
+              status: newStatus,
               expireAt: databaseRoom.expire_time !== undefined ? databaseRoom.expire_time : room.expireAt,
               lastCheckIn: newStatus === 'ใช้งานอยู่' ? (savedCheckIn || room.lastCheckIn) : null,
             };
@@ -234,10 +235,10 @@ export default function AdminPage() {
 
       setRooms((previousRooms) =>
         previousRooms.map((room) => {
-          const databaseRoom = data.rooms?.find((item) => {
-            const databaseRoomNumber = item.room_num ?? item.room_number;
-            return String(databaseRoomNumber ?? '').trim() === String(room.name).trim();
-          });
+          // 💡 เช็คสถานะโดยอ้างอิงจากรหัสห้อง หรือ ID ที่ถูกต้องเท่านั้น ไม่มีการเด้งสลับ
+          const databaseRoom = data.rooms?.find(
+            (item) => item.id === room.id || String(item.room_num ?? item.room_number).trim() === room.name
+          );
 
           if (!databaseRoom) return room;
 
@@ -277,20 +278,18 @@ export default function AdminPage() {
     }
   };
 
-// 🛠️ ฟังก์ชันเช็คสถานะ Wi-Fi เบื้องหลัง (แก้ไขเรื่อง Cache ให้ไม่อัปเดตค้าง)
   useEffect(() => {
     if (!isAuthenticated) return;
     
     const checkWifiStatus = async () => {
       const currentRooms = [...roomsRef.current];
       let hasChanges = false;
-      const ts = Date.now(); // 💡 เพิ่มเวลาปัจจุบันเข้าไปเพื่อทำลาย Cache
+      const ts = Date.now();
 
       for (let i = 0; i < currentRooms.length; i++) {
         const room = currentRooms[i];
         if (room.deviceId && room.deviceId.trim() !== '') {
           try {
-            // 💡 เพิ่ม &t=${ts} และ cache: 'no-store' เพื่อบังคับให้ดึงข้อมูลใหม่เสมอ
             const res = await fetch(`/api/tuya-status?deviceId=${room.deviceId.trim()}&t=${ts}`, {
               cache: 'no-store'
             });
@@ -302,7 +301,7 @@ export default function AdminPage() {
               }
             }
           } catch (e) {
-            // ซ่อน error ไว้หลังบ้านไม่ให้กวนหน้าแอดมิน
+            // ซ่อน error
           }
         }
       }
@@ -312,8 +311,8 @@ export default function AdminPage() {
       }
     };
 
-    checkWifiStatus(); // เช็คทันทีตอนเปิดหน้า
-    const wifiInterval = window.setInterval(checkWifiStatus, 15000); // ตั้งเวลาเช็คใหม่ทุก 15 วินาที
+    checkWifiStatus();
+    const wifiInterval = window.setInterval(checkWifiStatus, 60000); 
     return () => window.clearInterval(wifiInterval);
   }, [isAuthenticated]);
 
@@ -322,7 +321,7 @@ export default function AdminPage() {
     void fetchInitialData();
     const interval = window.setInterval(() => {
       void fetchRoomStatusOnly();
-    }, 5000);
+    }, 15000);
     return () => window.clearInterval(interval);
   }, [isAuthenticated]);
 
@@ -387,6 +386,7 @@ export default function AdminPage() {
   };
 
   const handleUpdateRoom = (id: string, field: keyof RoomData, value: string | number) => {
+    if (field === 'name') return; // 💡 ล็อกไม่ให้แก้ไขชื่อห้องจากการพิมพ์เด็ดขาด
     setRooms((previousRooms) =>
       previousRooms.map((room) => (room.id === id ? { ...room, [field]: value } : room))
     );
@@ -602,8 +602,8 @@ export default function AdminPage() {
                   <input
                     type="text"
                     value={room.name}
-                    onChange={(e) => handleUpdateRoom(room.id, 'name', e.target.value)}
-                    className="text-2xl font-black text-blue-900 bg-white border border-gray-300 rounded px-2 w-full focus:outline-none"
+                    readOnly
+                    className="text-2xl font-black text-blue-900 bg-gray-200 border border-gray-300 rounded px-2 w-full focus:outline-none cursor-not-allowed"
                   />
                 </div>
                 <div className="flex items-center space-x-2">
@@ -626,7 +626,6 @@ export default function AdminPage() {
                   สถานะ: {room.status === 'ว่าง' ? '🟢 ว่างพร้อมให้บริการ' : '🔴 มีลูกค้า (กำลังใช้งาน)'}
                 </div>
 
-                {/* 🛠️ บล็อกแสดงสถานะ Wi-Fi เบรกเกอร์ */}
                 <div className={`text-center py-1 mb-2 rounded-lg font-semibold text-sm transition-colors duration-500 ${
                   room.isOnline === true ? 'bg-blue-50 text-blue-600 border border-blue-200' : 
                   room.isOnline === false ? 'bg-red-50 text-red-600 border border-red-200' : 
