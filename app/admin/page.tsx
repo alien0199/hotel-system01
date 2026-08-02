@@ -173,12 +173,10 @@ export default function AdminPage() {
       if (roomsData.success && Array.isArray(roomsData.rooms)) {
         setRooms((previousRooms) =>
           previousRooms.map((room) => {
-            // 💡 ค้นหาข้อมูลแบบเจาะจงเฉพาะชื่อห้องที่ตรงกับหน้าเว็บ (11-18) เท่านั้น
             const databaseRoom = roomsData.rooms?.find(
               (item) => String(item.room_num ?? item.room_number).trim() === room.name
             );
 
-            // ถ้าหาไม่เจอในฐานข้อมูล (เช่นเพิ่งเคยสร้าง) ให้แสดงกล่องห้อง 11-18 เปล่าๆ รอเซฟ
             if (!databaseRoom) return room;
 
             const newStatus: RoomStatus = databaseRoom.status === 'occupied' ? 'ใช้งานอยู่' : 'ว่าง';
@@ -186,7 +184,7 @@ export default function AdminPage() {
 
             return {
               ...room,
-              id: databaseRoom.id || room.id, // ได้ ID ที่ถูกต้อง 100% จากฐานข้อมูล
+              id: databaseRoom.id || room.id,
               deviceId: databaseRoom.tuya_device_id !== undefined && databaseRoom.tuya_device_id !== null
                   ? String(databaseRoom.tuya_device_id)
                   : room.deviceId,
@@ -225,7 +223,7 @@ export default function AdminPage() {
   };
 
   const fetchRoomStatusOnly = async () => {
-    // 💡 อัปเกรด: ถ้าแอดมินพับหน้าจอ หรือสลับไปแท็บอื่น ให้หยุดยิง API ทันที (ประหยัดโควต้า)
+    // 💡 ถ้าแอดมินพับหน้าจอ ให้หยุดยิง API ทันที
     if (document.hidden) return;
 
     try {
@@ -238,7 +236,6 @@ export default function AdminPage() {
 
       setRooms((previousRooms) =>
         previousRooms.map((room) => {
-          // 💡 เช็คสถานะโดยอ้างอิงจากรหัสห้อง หรือ ID ที่ถูกต้องเท่านั้น ไม่มีการเด้งสลับ
           const databaseRoom = data.rooms?.find(
             (item) => item.id === room.id || String(item.room_num ?? item.room_number).trim() === room.name
           );
@@ -281,57 +278,53 @@ export default function AdminPage() {
     }
   };
 
+  // 🛠️ ระบบเช็ค Wi-Fi (แบบยิงทีละห้อง ป้องกันการโดน Tuya บล็อก)
   useEffect(() => {
     if (!isAuthenticated) return;
     
     const checkWifiStatus = async () => {
-      // 💡 อัปเกรด: ถ้าซ่อนแท็บอยู่ ไม่ต้องเช็ค Wi-Fi
+      // 💡 ถ้าพับหน้าจออยู่ ไม่ต้องเช็ค Wi-Fi
       if (document.hidden) return;
 
       const currentRooms = [...roomsRef.current];
       const ts = Date.now();
-
-      // 💡 อัปเกรด: ยิงคำสั่งเช็คสถานะทุกห้องพร้อมกัน (Promise.all) ไม่ต้องรอคิวทีละห้อง
-      const results = await Promise.all(
-        currentRooms.map(async (room, index) => {
-          if (room.deviceId && room.deviceId.trim() !== '') {
-            try {
-              const res = await fetch(`/api/tuya-status?deviceId=${room.deviceId.trim()}&t=${ts}`, {
-                cache: 'no-store'
-              });
-              if (res.ok) {
-                const data = await res.json();
-                if (data.success && room.isOnline !== data.isOnline) {
-                  return { index, isOnline: data.isOnline as boolean | null };
-                }
-              }
-            } catch (e) {
-              // ซ่อน error ไว้
-            }
-          }
-          return null;
-        })
-      );
-
       let hasChanges = false;
-      const updatedRooms = currentRooms.map((room, index) => {
-        const match = results.find((r) => r && r.index === index);
-        if (match) {
-          hasChanges = true;
-          return { ...room, isOnline: match.isOnline };
-        }
-        return room;
-      });
 
+      // 💡 เช็คทีละห้อง (Sequential) ปลอดภัยกับระบบของ Tuya ที่สุด
+      for (let i = 0; i < currentRooms.length; i++) {
+        const room = currentRooms[i];
+        if (room.deviceId && room.deviceId.trim() !== '') {
+          try {
+            const res = await fetch(`/api/tuya-status?deviceId=${room.deviceId.trim()}&t=${ts}`, {
+              cache: 'no-store'
+            });
+            if (res.ok) {
+              const data = await res.json();
+              if (data.success && room.isOnline !== data.isOnline) {
+                currentRooms[i] = { ...room, isOnline: data.isOnline };
+                hasChanges = true;
+              }
+            }
+          } catch (e) {
+            // ปล่อยผ่าน error ของห้องนั้นๆ ไป (ป้องกันระบบค้างทั้งหมด)
+          }
+        }
+      }
+      
       if (hasChanges) {
-        setRooms(updatedRooms);
+        setRooms(currentRooms);
       }
     };
 
-    checkWifiStatus();
-    const wifiInterval = window.setInterval(checkWifiStatus, 60000); // เช็คทุก 1 นาที (คงไว้ เพราะ Tuya มีโควต้าจำกัด)
+    // 💡 หน่วงเวลาเช็คครั้งแรก 3 วินาที รอข้อมูล Device ID จากฐานข้อมูลให้พร้อมก่อน
+    const initialCheck = setTimeout(() => {
+      checkWifiStatus();
+    }, 3000);
 
-    // 💡 พอเปิดจอ/สลับกลับมาแท็บนี้ ให้เช็ค Wi-Fi ทันทีเช่นกัน
+    // 💡 เช็ค Wi-Fi ทุกๆ 15 วินาที
+    const wifiInterval = window.setInterval(checkWifiStatus, 15000); 
+
+    // 💡 สลับกลับมาแท็บนี้ ให้อัปเดต Wi-Fi ทันที
     const handleVisibilityChange = () => {
       if (!document.hidden) {
         void checkWifiStatus();
@@ -340,19 +333,23 @@ export default function AdminPage() {
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
+      clearTimeout(initialCheck);
       window.clearInterval(wifiInterval);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [isAuthenticated]);
 
+  // 🛠️ ระบบเช็คสถานะห้อง (Supabase)
   useEffect(() => {
     if (!isAuthenticated) return;
     void fetchInitialData();
+    
+    // 💡 เช็คห้องทุกๆ 5 วินาที
     const interval = window.setInterval(() => {
       void fetchRoomStatusOnly();
-    }, 5000); // 💡 กลับไปใช้ 5 วิเหมือนเดิม เพราะตอนนี้หยุดยิงอัตโนมัติเมื่อพับจอแล้ว (Supabase รับโหลดนี้ไหว)
+    }, 5000); 
 
-    // 💡 พอเปิดจอ/สลับกลับมาแท็บนี้ ให้เช็คสถานะทันที ไม่ต้องรอรอบถัดไป
+    // 💡 สลับกลับมาแท็บนี้ ให้อัปเดตสถานะห้องทันที
     const handleVisibilityChange = () => {
       if (!document.hidden) {
         void fetchRoomStatusOnly();
@@ -427,7 +424,7 @@ export default function AdminPage() {
   };
 
   const handleUpdateRoom = (id: string, field: keyof RoomData, value: string | number) => {
-    if (field === 'name') return; // 💡 ล็อกไม่ให้แก้ไขชื่อห้องจากการพิมพ์เด็ดขาด
+    if (field === 'name') return; 
     setRooms((previousRooms) =>
       previousRooms.map((room) => (room.id === id ? { ...room, [field]: value } : room))
     );
