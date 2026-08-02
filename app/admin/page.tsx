@@ -14,7 +14,7 @@ interface RoomData {
   lastCheckIn: string | null;
   lastCheckOut: string | null;
   expireAt: string | null;
-  isOnline?: boolean | null; // 🛠️ เพิ่ม state สำหรับเก็บสถานะ Wi-Fi ของเบรกเกอร์
+  isOnline?: boolean | null; // 🛠️ เก็บสถานะ Wi-Fi ของเบรกเกอร์
 }
 
 interface DatabaseRoom {
@@ -57,9 +57,10 @@ interface HistoryLog {
   checkOut: string;
 }
 
+// 🛠️ แก้ไขให้เริ่มต้นด้วยห้อง 11-18 ตายตัว
 const defaultRooms: RoomData[] = Array.from({ length: 8 }, (_, i) => ({
   id: `room_${i + 1}`,
-  name: `10${i + 1}`,
+  name: `${11 + i}`, 
   deviceId: '',
   price: 350,
   usageCount: 0,
@@ -146,7 +147,7 @@ export default function AdminPage() {
     }
   };
 
-const fetchInitialData = async () => {
+  const fetchInitialData = async () => {
     try {
       const ts = Date.now();
       
@@ -171,7 +172,7 @@ const fetchInitialData = async () => {
       const roomsData = (await roomsResponse.json()) as RoomsApiResponse;
 
       if (roomsData.success && Array.isArray(roomsData.rooms)) {
-        // 💡 แก้ไข: นำข้อมูลจาก DB มาเรียงตามตัวเลขห้อง เพื่อให้อยู่ถูกช่องเสมอ
+        // 🛠️ นำข้อมูลจาก DB มาเรียงตามตัวเลขห้อง เพื่อให้อยู่ถูกช่องเสมอ (ป้องกันการเด้งสลับ)
         const sortedDbRooms = [...roomsData.rooms].sort((a, b) => {
             const numA = parseInt(String(a.room_num ?? a.room_number).replace(/\D/g, '')) || 0;
             const numB = parseInt(String(b.room_num ?? b.room_number).replace(/\D/g, '')) || 0;
@@ -180,20 +181,19 @@ const fetchInitialData = async () => {
 
         setRooms((previousRooms) =>
           previousRooms.map((room, index) => {
-            const databaseRoom = sortedDbRooms[index]; // 💡 จับคู่ตามลำดับ (Index) แทนการจับคู่ด้วยชื่อห้อง
+            const databaseRoom = sortedDbRooms[index]; // จับคู่ตามลำดับ (Index)
 
             if (!databaseRoom) return room;
 
             const newStatus: RoomStatus = databaseRoom.status === 'occupied' ? 'ใช้งานอยู่' : 'ว่าง';
             
-            // 💡 ดึงชื่อห้องล่าสุดจากฐานข้อมูล
             const dbName = String(databaseRoom.room_num ?? databaseRoom.room_number ?? room.name).trim();
             const savedCheckIn = localStorage.getItem(`checkIn_${dbName}`);
 
             return {
               ...room,
-              id: databaseRoom.id || room.id, // เก็บ ID จริงไว้ใช้งานต่อ
-              name: dbName, // 💡 อัปเดตชื่อห้องในหน้าเว็บ ให้ตรงกับฐานข้อมูลเสมอ
+              id: databaseRoom.id || room.id, 
+              name: dbName, 
               status: newStatus,
               deviceId: databaseRoom.tuya_device_id !== undefined && databaseRoom.tuya_device_id !== null
                   ? String(databaseRoom.tuya_device_id)
@@ -242,7 +242,7 @@ const fetchInitialData = async () => {
 
       setRooms((previousRooms) =>
         previousRooms.map((room) => {
-          // 💡 รอบแอบอัปเดตสถานะ ให้จับคู่ด้วย "ID ฐานข้อมูล" (แม่นยำกว่าการใช้ชื่อห้อง)
+          // 🛠️ จับคู่ด้วย ID ฐานข้อมูล เพื่อให้มั่นใจว่าไม่ผิดช่อง
           const databaseRoom = data.rooms?.find((item) => item.id === room.id);
 
           if (!databaseRoom) return room;
@@ -272,7 +272,7 @@ const fetchInitialData = async () => {
 
           return {
             ...room,
-            name: dbName, // 💡 ถ้ามีการแก้ชื่อจากระบบอื่น หน้าเว็บนี้จะเปลี่ยนชื่อตามให้อัตโนมัติด้วย
+            name: dbName,
             status: newStatus,
             expireAt: newExpireAt,
             lastCheckIn: currentCheckIn,
@@ -285,20 +285,19 @@ const fetchInitialData = async () => {
     }
   };
 
-// 🛠️ ฟังก์ชันเช็คสถานะ Wi-Fi เบื้องหลัง (แก้ไขเรื่อง Cache ให้ไม่อัปเดตค้าง)
+  // 🛠️ ฟังก์ชันเช็คสถานะ Wi-Fi เบื้องหลัง (แก้ไขเรื่อง Cache ให้ไม่อัปเดตค้าง)
   useEffect(() => {
     if (!isAuthenticated) return;
     
     const checkWifiStatus = async () => {
       const currentRooms = [...roomsRef.current];
       let hasChanges = false;
-      const ts = Date.now(); // 💡 เพิ่มเวลาปัจจุบันเข้าไปเพื่อทำลาย Cache
+      const ts = Date.now();
 
       for (let i = 0; i < currentRooms.length; i++) {
         const room = currentRooms[i];
         if (room.deviceId && room.deviceId.trim() !== '') {
           try {
-            // 💡 เพิ่ม &t=${ts} และ cache: 'no-store' เพื่อบังคับให้ดึงข้อมูลใหม่เสมอ
             const res = await fetch(`/api/tuya-status?deviceId=${room.deviceId.trim()}&t=${ts}`, {
               cache: 'no-store'
             });
@@ -320,8 +319,8 @@ const fetchInitialData = async () => {
       }
     };
 
-    checkWifiStatus(); // เช็คทันทีตอนเปิดหน้า
-    const wifiInterval = window.setInterval(checkWifiStatus, 15000); // ตั้งเวลาเช็คใหม่ทุก 15 วินาที
+    checkWifiStatus();
+    const wifiInterval = window.setInterval(checkWifiStatus, 15000); 
     return () => window.clearInterval(wifiInterval);
   }, [isAuthenticated]);
 
@@ -634,7 +633,6 @@ const fetchInitialData = async () => {
                   สถานะ: {room.status === 'ว่าง' ? '🟢 ว่างพร้อมให้บริการ' : '🔴 มีลูกค้า (กำลังใช้งาน)'}
                 </div>
 
-                {/* 🛠️ บล็อกแสดงสถานะ Wi-Fi เบรกเกอร์ */}
                 <div className={`text-center py-1 mb-2 rounded-lg font-semibold text-sm transition-colors duration-500 ${
                   room.isOnline === true ? 'bg-blue-50 text-blue-600 border border-blue-200' : 
                   room.isOnline === false ? 'bg-red-50 text-red-600 border border-red-200' : 
