@@ -146,7 +146,7 @@ export default function AdminPage() {
     }
   };
 
-const fetchInitialData = async () => {
+  const fetchInitialData = async () => {
     try {
       const ts = Date.now();
       
@@ -171,29 +171,21 @@ const fetchInitialData = async () => {
       const roomsData = (await roomsResponse.json()) as RoomsApiResponse;
 
       if (roomsData.success && Array.isArray(roomsData.rooms)) {
-        // 💡 แก้ไข: นำข้อมูลจาก DB มาเรียงตามตัวเลขห้อง เพื่อให้อยู่ถูกช่องเสมอ
-        const sortedDbRooms = [...roomsData.rooms].sort((a, b) => {
-            const numA = parseInt(String(a.room_num ?? a.room_number).replace(/\D/g, '')) || 0;
-            const numB = parseInt(String(b.room_num ?? b.room_number).replace(/\D/g, '')) || 0;
-            return numA - numB;
-        });
-
         setRooms((previousRooms) =>
-          previousRooms.map((room, index) => {
-            const databaseRoom = sortedDbRooms[index]; // 💡 จับคู่ตามลำดับ (Index) แทนการจับคู่ด้วยชื่อห้อง
+          previousRooms.map((room) => {
+            const databaseRoom = roomsData.rooms?.find((item) => {
+              const databaseRoomNumber = item.room_num ?? item.room_number;
+              return String(databaseRoomNumber ?? '').trim() === String(room.name).trim();
+            });
 
             if (!databaseRoom) return room;
 
             const newStatus: RoomStatus = databaseRoom.status === 'occupied' ? 'ใช้งานอยู่' : 'ว่าง';
-            
-            // 💡 ดึงชื่อห้องล่าสุดจากฐานข้อมูล
-            const dbName = String(databaseRoom.room_num ?? databaseRoom.room_number ?? room.name).trim();
-            const savedCheckIn = localStorage.getItem(`checkIn_${dbName}`);
+            const savedCheckIn = localStorage.getItem(`checkIn_${room.name}`);
 
             return {
               ...room,
-              id: databaseRoom.id || room.id, // เก็บ ID จริงไว้ใช้งานต่อ
-              name: dbName, // 💡 อัปเดตชื่อห้องในหน้าเว็บ ให้ตรงกับฐานข้อมูลเสมอ
+              id: databaseRoom.id || room.id,
               status: newStatus,
               deviceId: databaseRoom.tuya_device_id !== undefined && databaseRoom.tuya_device_id !== null
                   ? String(databaseRoom.tuya_device_id)
@@ -242,16 +234,17 @@ const fetchInitialData = async () => {
 
       setRooms((previousRooms) =>
         previousRooms.map((room) => {
-          // 💡 รอบแอบอัปเดตสถานะ ให้จับคู่ด้วย "ID ฐานข้อมูล" (แม่นยำกว่าการใช้ชื่อห้อง)
-          const databaseRoom = data.rooms?.find((item) => item.id === room.id);
+          const databaseRoom = data.rooms?.find((item) => {
+            const databaseRoomNumber = item.room_num ?? item.room_number;
+            return String(databaseRoomNumber ?? '').trim() === String(room.name).trim();
+          });
 
           if (!databaseRoom) return room;
 
           const newStatus: RoomStatus = databaseRoom.status === 'occupied' ? 'ใช้งานอยู่' : 'ว่าง';
           const newExpireAt = databaseRoom.expire_time !== undefined ? databaseRoom.expire_time : room.expireAt;
-          const dbName = String(databaseRoom.room_num ?? databaseRoom.room_number ?? room.name).trim();
 
-          if (room.status === newStatus && room.expireAt === newExpireAt && room.name === dbName) {
+          if (room.status === newStatus && room.expireAt === newExpireAt) {
             return room;
           }
 
@@ -259,20 +252,19 @@ const fetchInitialData = async () => {
           let currentCheckIn = room.lastCheckIn;
 
           if (room.status === 'ว่าง' && newStatus === 'ใช้งานอยู่') {
-            localStorage.setItem(`checkIn_${dbName}`, now);
+            localStorage.setItem(`checkIn_${room.name}`, now);
             currentCheckIn = now;
           } else if (room.status === 'ใช้งานอยู่' && newStatus === 'ว่าง') {
-            const checkInTime = localStorage.getItem(`checkIn_${dbName}`) || room.lastCheckIn || '-';
-            addHistoryLog(dbName, room.price, checkInTime, now);
-            localStorage.removeItem(`checkIn_${dbName}`);
+            const checkInTime = localStorage.getItem(`checkIn_${room.name}`) || room.lastCheckIn || '-';
+            addHistoryLog(room.name, room.price, checkInTime, now);
+            localStorage.removeItem(`checkIn_${room.name}`);
             currentCheckIn = null;
           } else if (newStatus === 'ใช้งานอยู่') {
-            currentCheckIn = localStorage.getItem(`checkIn_${dbName}`) || room.lastCheckIn;
+            currentCheckIn = localStorage.getItem(`checkIn_${room.name}`) || room.lastCheckIn;
           }
 
           return {
             ...room,
-            name: dbName, // 💡 ถ้ามีการแก้ชื่อจากระบบอื่น หน้าเว็บนี้จะเปลี่ยนชื่อตามให้อัตโนมัติด้วย
             status: newStatus,
             expireAt: newExpireAt,
             lastCheckIn: currentCheckIn,
