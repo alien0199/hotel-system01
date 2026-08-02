@@ -225,6 +225,9 @@ export default function AdminPage() {
   };
 
   const fetchRoomStatusOnly = async () => {
+    // 💡 อัปเกรด: ถ้าแอดมินพับหน้าจอ หรือสลับไปแท็บอื่น ให้หยุดยิง API ทันที (ประหยัดโควต้า)
+    if (document.hidden) return;
+
     try {
       const ts = Date.now();
       const response = await fetch(`/api/get-rooms?t=${ts}`, { method: 'GET', cache: 'no-store' });
@@ -282,32 +285,46 @@ export default function AdminPage() {
     if (!isAuthenticated) return;
     
     const checkWifiStatus = async () => {
+      // 💡 อัปเกรด: ถ้าซ่อนแท็บอยู่ ไม่ต้องเช็ค Wi-Fi
+      if (document.hidden) return;
+
       const currentRooms = [...roomsRef.current];
-      let hasChanges = false;
       const ts = Date.now();
 
-      for (let i = 0; i < currentRooms.length; i++) {
-        const room = currentRooms[i];
-        if (room.deviceId && room.deviceId.trim() !== '') {
-          try {
-            const res = await fetch(`/api/tuya-status?deviceId=${room.deviceId.trim()}&t=${ts}`, {
-              cache: 'no-store'
-            });
-            if (res.ok) {
-              const data = await res.json();
-              if (data.success && room.isOnline !== data.isOnline) {
-                currentRooms[i] = { ...room, isOnline: data.isOnline };
-                hasChanges = true;
+      // 💡 อัปเกรด: ยิงคำสั่งเช็คสถานะทุกห้องพร้อมกัน (Promise.all) ไม่ต้องรอคิวทีละห้อง
+      const results = await Promise.all(
+        currentRooms.map(async (room, index) => {
+          if (room.deviceId && room.deviceId.trim() !== '') {
+            try {
+              const res = await fetch(`/api/tuya-status?deviceId=${room.deviceId.trim()}&t=${ts}`, {
+                cache: 'no-store'
+              });
+              if (res.ok) {
+                const data = await res.json();
+                if (data.success && room.isOnline !== data.isOnline) {
+                  return { index, isOnline: data.isOnline as boolean | null };
+                }
               }
+            } catch (e) {
+              // ซ่อน error ไว้
             }
-          } catch (e) {
-            // ซ่อน error
           }
+          return null;
+        })
+      );
+
+      let hasChanges = false;
+      const updatedRooms = currentRooms.map((room, index) => {
+        const match = results.find((r) => r && r.index === index);
+        if (match) {
+          hasChanges = true;
+          return { ...room, isOnline: match.isOnline };
         }
-      }
-      
+        return room;
+      });
+
       if (hasChanges) {
-        setRooms(currentRooms);
+        setRooms(updatedRooms);
       }
     };
 
