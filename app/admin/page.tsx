@@ -14,7 +14,7 @@ interface RoomData {
   lastCheckIn: string | null;
   lastCheckOut: string | null;
   expireAt: string | null;
-  isOnline?: boolean | null; // 🛠️ เก็บสถานะ Wi-Fi ของเบรกเกอร์
+  isOnline?: boolean | null;
 }
 
 interface DatabaseRoom {
@@ -57,7 +57,7 @@ interface HistoryLog {
   checkOut: string;
 }
 
-// 🛠️ แก้ไขให้เริ่มต้นด้วยห้อง 11-18 ตายตัว
+// 🛠️ บังคับค่าเริ่มต้นเป็น 11-18 ตายตัว
 const defaultRooms: RoomData[] = Array.from({ length: 8 }, (_, i) => ({
   id: `room_${i + 1}`,
   name: `${11 + i}`, 
@@ -108,7 +108,6 @@ export default function AdminPage() {
 
   const [historyLogs, setHistoryLogs] = useState<HistoryLog[]>([]);
 
-  // 🛠️ ใช้ useRef เก็บค่า rooms ล่าสุด เพื่อให้ setInterval ทำงานร่วมกับ State ได้แม่นยำ
   const roomsRef = useRef<RoomData[]>(rooms);
   useEffect(() => {
     roomsRef.current = rooms;
@@ -172,7 +171,6 @@ export default function AdminPage() {
       const roomsData = (await roomsResponse.json()) as RoomsApiResponse;
 
       if (roomsData.success && Array.isArray(roomsData.rooms)) {
-        // 🛠️ นำข้อมูลจาก DB มาเรียงตามตัวเลขห้อง เพื่อให้อยู่ถูกช่องเสมอ (ป้องกันการเด้งสลับ)
         const sortedDbRooms = [...roomsData.rooms].sort((a, b) => {
             const numA = parseInt(String(a.room_num ?? a.room_number).replace(/\D/g, '')) || 0;
             const numB = parseInt(String(b.room_num ?? b.room_number).replace(/\D/g, '')) || 0;
@@ -181,19 +179,19 @@ export default function AdminPage() {
 
         setRooms((previousRooms) =>
           previousRooms.map((room, index) => {
-            const databaseRoom = sortedDbRooms[index]; // จับคู่ตามลำดับ (Index)
+            const databaseRoom = sortedDbRooms[index]; 
+            // 💡 ล็อกตายตัว! บังคับให้ชื่อห้องเป็น 11-18 ตามลำดับเสมอ ไม่สนใจข้อมูลจากฐานข้อมูล
+            const fixedName = String(11 + index); 
 
-            if (!databaseRoom) return room;
+            if (!databaseRoom) return { ...room, name: fixedName };
 
             const newStatus: RoomStatus = databaseRoom.status === 'occupied' ? 'ใช้งานอยู่' : 'ว่าง';
-            
-            const dbName = String(databaseRoom.room_num ?? databaseRoom.room_number ?? room.name).trim();
-            const savedCheckIn = localStorage.getItem(`checkIn_${dbName}`);
+            const savedCheckIn = localStorage.getItem(`checkIn_${fixedName}`);
 
             return {
               ...room,
               id: databaseRoom.id || room.id, 
-              name: dbName, 
+              name: fixedName, // 💡 ใช้ชื่อที่ล็อกไว้
               status: newStatus,
               deviceId: databaseRoom.tuya_device_id !== undefined && databaseRoom.tuya_device_id !== null
                   ? String(databaseRoom.tuya_device_id)
@@ -242,16 +240,17 @@ export default function AdminPage() {
 
       setRooms((previousRooms) =>
         previousRooms.map((room) => {
-          // 🛠️ จับคู่ด้วย ID ฐานข้อมูล เพื่อให้มั่นใจว่าไม่ผิดช่อง
           const databaseRoom = data.rooms?.find((item) => item.id === room.id);
 
           if (!databaseRoom) return room;
 
           const newStatus: RoomStatus = databaseRoom.status === 'occupied' ? 'ใช้งานอยู่' : 'ว่าง';
           const newExpireAt = databaseRoom.expire_time !== undefined ? databaseRoom.expire_time : room.expireAt;
-          const dbName = String(databaseRoom.room_num ?? databaseRoom.room_number ?? room.name).trim();
+          
+          // 💡 คงชื่อห้อง 11-18 เอาไว้ ไม่ให้เปลี่ยนตามฐานข้อมูลตอนรีเฟรช
+          const fixedName = room.name; 
 
-          if (room.status === newStatus && room.expireAt === newExpireAt && room.name === dbName) {
+          if (room.status === newStatus && room.expireAt === newExpireAt) {
             return room;
           }
 
@@ -259,20 +258,20 @@ export default function AdminPage() {
           let currentCheckIn = room.lastCheckIn;
 
           if (room.status === 'ว่าง' && newStatus === 'ใช้งานอยู่') {
-            localStorage.setItem(`checkIn_${dbName}`, now);
+            localStorage.setItem(`checkIn_${fixedName}`, now);
             currentCheckIn = now;
           } else if (room.status === 'ใช้งานอยู่' && newStatus === 'ว่าง') {
-            const checkInTime = localStorage.getItem(`checkIn_${dbName}`) || room.lastCheckIn || '-';
-            addHistoryLog(dbName, room.price, checkInTime, now);
-            localStorage.removeItem(`checkIn_${dbName}`);
+            const checkInTime = localStorage.getItem(`checkIn_${fixedName}`) || room.lastCheckIn || '-';
+            addHistoryLog(fixedName, room.price, checkInTime, now);
+            localStorage.removeItem(`checkIn_${fixedName}`);
             currentCheckIn = null;
           } else if (newStatus === 'ใช้งานอยู่') {
-            currentCheckIn = localStorage.getItem(`checkIn_${dbName}`) || room.lastCheckIn;
+            currentCheckIn = localStorage.getItem(`checkIn_${fixedName}`) || room.lastCheckIn;
           }
 
           return {
             ...room,
-            name: dbName,
+            name: fixedName,
             status: newStatus,
             expireAt: newExpireAt,
             lastCheckIn: currentCheckIn,
@@ -285,7 +284,6 @@ export default function AdminPage() {
     }
   };
 
-  // 🛠️ ฟังก์ชันเช็คสถานะ Wi-Fi เบื้องหลัง (แก้ไขเรื่อง Cache ให้ไม่อัปเดตค้าง)
   useEffect(() => {
     if (!isAuthenticated) return;
     
@@ -309,7 +307,7 @@ export default function AdminPage() {
               }
             }
           } catch (e) {
-            // ซ่อน error ไว้หลังบ้านไม่ให้กวนหน้าแอดมิน
+            // ซ่อน error
           }
         }
       }
@@ -320,7 +318,7 @@ export default function AdminPage() {
     };
 
     checkWifiStatus();
-    const wifiInterval = window.setInterval(checkWifiStatus, 15000); 
+    const wifiInterval = window.setInterval(checkWifiStatus, 60000); 
     return () => window.clearInterval(wifiInterval);
   }, [isAuthenticated]);
 
@@ -329,7 +327,7 @@ export default function AdminPage() {
     void fetchInitialData();
     const interval = window.setInterval(() => {
       void fetchRoomStatusOnly();
-    }, 5000);
+    }, 15000);
     return () => window.clearInterval(interval);
   }, [isAuthenticated]);
 
@@ -394,6 +392,8 @@ export default function AdminPage() {
   };
 
   const handleUpdateRoom = (id: string, field: keyof RoomData, value: string | number) => {
+    // ปิดการอัปเดต 'name' เผื่อไว้กันพลาด
+    if (field === 'name') return; 
     setRooms((previousRooms) =>
       previousRooms.map((room) => (room.id === id ? { ...room, [field]: value } : room))
     );
@@ -606,11 +606,12 @@ export default function AdminPage() {
               <div className="bg-gray-50 px-4 py-3 border-b border-gray-200 flex justify-between items-center">
                 <div className="flex items-center space-x-2 w-1/2">
                   <span className="font-bold text-gray-500">ห้อง:</span>
+                  {/* 💡 ล็อกช่องพิมพ์เป็น Read-only ให้เป็นสีเทาและพิมพ์แก้ไม่ได้ */}
                   <input
                     type="text"
                     value={room.name}
-                    onChange={(e) => handleUpdateRoom(room.id, 'name', e.target.value)}
-                    className="text-2xl font-black text-blue-900 bg-white border border-gray-300 rounded px-2 w-full focus:outline-none"
+                    readOnly
+                    className="text-2xl font-black text-blue-900 bg-gray-200 border border-gray-300 rounded px-2 w-full focus:outline-none cursor-not-allowed"
                   />
                 </div>
                 <div className="flex items-center space-x-2">
