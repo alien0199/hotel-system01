@@ -1,76 +1,112 @@
 import { NextResponse } from 'next/server';
 
-// บังคับให้ Vercel ประมวลผลใหม่ทุกครั้ง ห้ามจำค่าเก่า (Cache) เด็ดขาด
-export const dynamic = 'force-dynamic';
-
 export async function GET(request: Request) {
-  try {
-    // ใช้โดเมนของเว็บไซต์ตัวเอง
-    const baseUrl = 'https://hotel-system01.vercel.app';
-    
-    // 1. ดึงข้อมูลห้องทั้งหมดจากฐานข้อมูล เพื่อเช็คว่ามีห้องไหนหมดเวลาไหม
-    const res = await fetch(`${baseUrl}/api/get-rooms?t=${Date.now()}`, { 
-      cache: 'no-store' 
-    });
-    
-    if (!res.ok) throw new Error('ไม่สามารถเชื่อมต่อฐานข้อมูลได้');
-    const data = await res.json();
+  // ---------------------------------------------------------
+  // 1. ระบบรักษาความปลอดภัย: ป้องกันคนนอกแอบรัน API
+  // ---------------------------------------------------------
+  const authHeader = request.headers.get('authorization');
+  const CRON_SECRET = process.env.CRON_SECRET || 'SG_SECRET_1234'; // รหัสผ่านสำหรับ cron-job
 
-    if (!data.success || !Array.isArray(data.rooms)) {
-       return NextResponse.json({ success: false, message: 'ข้อมูลห้องไม่ถูกต้อง' });
+  if (authHeader !== `Bearer ${CRON_SECRET}`) {
+    return NextResponse.json(
+      { success: false, message: 'ไม่อนุญาตให้เข้าถึง (Unauthorized)' },
+      { status: 401 }
+    );
+  }
+
+  try {
+    // หา Base URL ของเว็บตัวเองเพื่อใช้เรียก API ภายใน (รองรับทั้งตอนเทสและตอนขึ้น Vercel)
+    const url = new URL(request.url);
+    const baseUrl = `${url.protocol}//${url.host}`;
+
+    // ---------------------------------------------------------
+    // 2. ดึงข้อมูลห้องทั้งหมดจากฐานข้อมูลมาตรวจสอบ
+    // ---------------------------------------------------------
+    const roomsResponse = await fetch(`${baseUrl}/api/get-rooms?t=${Date.now()}`, { cache: 'no-store' });
+    
+    if (!roomsResponse.ok) {
+      throw new Error('ไม่สามารถดึงข้อมูลสถานะห้องได้');
+    }
+    
+    const roomsData = await roomsResponse.json();
+    if (!roomsData.success || !Array.isArray(roomsData.rooms)) {
+      return NextResponse.json({ success: false, message: 'รูปแบบข้อมูลห้องไม่ถูกต้อง' });
     }
 
     const now = Date.now();
-    const results = [];
+    const actionsTaken = []; // เก็บประวัติการทำงานเพื่อส่งกลับไปดู log
 
-    // 2. วนลูปตรวจสอบทุกห้อง
-    for (const room of data.rooms) {
-      // ตรวจสอบเฉพาะห้องที่มีลูกค้า และมีการตั้งเวลาหมดอายุไว้
+    // ---------------------------------------------------------
+    // 3. วนลูปหาเฉพาะห้องที่ "มีลูกค้า" และ "หมดเวลาแล้ว"
+    // ---------------------------------------------------------
+    for (const room of roomsData.rooms) {
+      // เช็คว่าสถานะห้องถูกใช้งานอยู่ และมีเวลาหมดอายุตั้งไว้
       if (room.status === 'occupied' && room.expire_time) {
-        const expireTime = new Date(room.expire_time).getTime();
+        const expireTimeMs = new Date(room.expire_time).getTime();
         
-        // 3. ถ้าเวลาปัจจุบัน "เลย" หรือ "เท่ากับ" เวลาหมดอายุแล้ว (หมดเวลา)
-        if (now >= expireTime) {
+        // ถ้าเวลาปัจจุบัน เลยเวลาหมดอายุไปแล้ว
+        if (now >= expireTimeMs) {
+          const roomNameStr = String(room.room_num ?? room.room_number ?? room.name).trim();
           
-          // 3.1 สั่งปิดไฟ Tuya ผ่าน API ที่เรามีอยู่แล้ว
           if (room.tuya_device_id) {
-            await fetch(`${baseUrl}/api/sonoff`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              cache: 'no-store',
-              body: JSON.stringify({
-                roomNumber: room.room_num || room.room_number,
-                deviceId: room.tuya_device_id,
-                action: 'turn-off'
-              })
-            }).catch(e => console.error('Tuya Turn off error:', e));
-          }
-          
-          // 3.2 อัปเดตสถานะห้องในฐานข้อมูลให้กลับมาเป็น "ว่าง" (available) และเคลียร์เวลา
-          await fetch(`${baseUrl}/api/get-rooms`, {
-             method: 'POST',
-             headers: { 'Content-Type': 'application/json' },
-             cache: 'no-store',
-             body: JSON.stringify({
-               roomNumber: room.room_num || room.room_number,
-               status: 'available'
-             })
-          }).catch(e => console.error('Database Update error:', e));
+            // ---------------------------------------------------------
+            // 4. สำคัญมาก (Critical Fix): ต้องปิดไฟให้สำเร็จก่อน ค่อยเคลียร์ห้องเป็น "ว่าง"
+            // ---------------------------------------------------------
+            try {
+              // 4.1 สั่งปิดเบรกเกอร์ Tuya
+              const tuyaResponse = await fetch(`${baseUrl}/api/sonoff`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                  roomNumber: roomNameStr, 
+                  deviceId: room.tuya_device_id, 
+                  action: 'turn-off' 
+                })
+              });
+              
+              const tuyaData = await tuyaResponse.json();
 
-          // เก็บประวัติไว้ดูว่าห้องไหนเพิ่งถูกระบบตัดไฟไปบ้าง
-          results.push({ room: room.room_num || room.room_number, status: 'Turned Off Success' });
+              // 4.2 ตรวจสอบว่าปิดไฟสำเร็จจริงหรือไม่
+              if (tuyaResponse.ok && tuyaData.success) {
+                // ปิดไฟสำเร็จ -> เปลี่ยนสถานะห้องในฐานข้อมูลเป็น "ว่าง" (available)
+                await fetch(`${baseUrl}/api/get-rooms`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ 
+                    roomNumber: roomNameStr, 
+                    status: 'available' 
+                  })
+                });
+                
+                actionsTaken.push(`[สำเร็จ] ห้อง ${roomNameStr}: ปิดไฟและเคลียร์สถานะเป็นว่างเรียบร้อย`);
+              } else {
+                // ปิดไฟไม่สำเร็จ (เช่น เน็ตหลุด, Token หมด) -> ห้ามเคลียร์ห้อง!
+                console.error(`Tuya Error สำหรับห้อง ${roomNameStr}:`, tuyaData.message);
+                actionsTaken.push(`[ล้มเหลว] ห้อง ${roomNameStr}: ปิดไฟจาก Tuya ไม่สำเร็จ ระงับการเปลี่ยนสถานะเป็นห้องว่าง`);
+              }
+            } catch (error) {
+               console.error(`ระบบขัดข้องขณะติดต่อ Tuya สำหรับห้อง ${roomNameStr}:`, error);
+               actionsTaken.push(`[ขัดข้อง] ห้อง ${roomNameStr}: ไม่สามารถส่งคำสั่งไป Tuya ได้ ระงับการเปลี่ยนสถานะ`);
+            }
+          }
         }
       }
     }
 
-    // ส่งผลลัพธ์กลับไปให้ Cron-Job.org ทราบว่าทำงานเรียบร้อย
+    // ---------------------------------------------------------
+    // 5. ส่งผลลัพธ์กลับไปให้ระบบ Cron-job ทราบ
+    // ---------------------------------------------------------
     return NextResponse.json({ 
       success: true, 
-      processedRooms: results, 
-      timestamp: new Date().toISOString() 
+      message: 'รันระบบตรวจเช็คเวลาหมดอายุเสร็จสิ้น',
+      actions: actionsTaken.length > 0 ? actionsTaken : 'ไม่มีห้องที่หมดเวลา'
     });
 
-  } catch (error: any) {
-    return NextResponse.json({ success: false, message: error.message }, { status: 500 });
+  } catch (error) {
+    console.error('Check expire error:', error);
+    return NextResponse.json(
+      { success: false, message: 'เกิดข้อผิดพลาดร้ายแรงในระบบตรวจเช็คเวลา' }, 
+      { status: 500 }
+    );
   }
 }
